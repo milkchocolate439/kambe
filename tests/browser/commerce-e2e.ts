@@ -5,7 +5,10 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import { chromium, type Browser, type Page } from "playwright-core";
+import { createApp } from "../../server/app.ts";
+import { Client } from "../helpers.ts";
 
 const PORT = 3312;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -40,8 +43,14 @@ async function dealAction(page: Page, title: string, label: string) {
 async function main() {
   mkdirSync(OUT, { recursive: true });
   const dataDir = mkdtempSync(join(tmpdir(), "pinpath-commerce-"));
+  const dbPath = join(dataDir, "c.db");
+  // Moderator ditunjuk lewat ID akun: buat akunnya dulu di DB yang sama, baru nyalakan server dengan ID itu.
+  const seed = createApp({ dbPath });
+  await new Promise<void>((r) => seed.server.listen(0, "127.0.0.1", () => r()));
+  const modId = (await new Client(`http://127.0.0.1:${(seed.server.address() as AddressInfo).port}`).signup("Moderator_Satu", PASS)).me.id;
+  await seed.close();
   const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), PINPATH_DB: join(dataDir, "c.db") },
+    env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), PINPATH_DB: dbPath, PINPATH_MODERATORS: modId },
     stdio: ["ignore", "inherit", "inherit"],
   });
   let browser: Browser | null = null;
@@ -104,9 +113,14 @@ async function main() {
     await seller.getByRole("button", { name: /Anon_Wolf99/ }).click();
     await seller.locator(".deal-card", { hasText: "Dana ditahan rekber" }).waitFor();
     check(!(await seller.locator(".deal-card").getByRole("button", { name: "Barang diterima · cairkan" }).count()), "penjual tidak punya tombol pencairan (hanya pembeli)");
-    await dealAction(seller, "Arabica Gayo Wine 5 Kg", "Tandai sudah dikirim");
+    await seller.locator(".deal-card", { hasText: "Arabica Gayo Wine 5 Kg" }).getByRole("button", { name: "Tandai sudah dikirim" }).click();
+    await seller.getByLabel("Kurir / cara penyerahan").selectOption("SiCepat");
+    check(await seller.getByRole("button", { name: "Tandai dikirim" }).isDisabled(), "kirim ditolak tanpa nomor resi");
+    await seller.getByLabel("Nomor resi").fill("sc0012345678");
+    await seller.getByRole("button", { name: "Tandai dikirim" }).click();
     await card.getByText("Sudah dikirim").waitFor();
     check(await card.getByText(/Cair otomatis/).isVisible(), "pembeli melihat jadwal pencairan otomatis");
+    check(await card.getByText("SC0012345678").isVisible(), "pembeli melihat kurir & nomor resi");
 
     // Pembeli membagikan identitas pengiriman secara E2EE.
     await card.getByRole("button", { name: "Bagikan identitas" }).click();
@@ -142,6 +156,41 @@ async function main() {
     await seller.getByRole("button", { name: "Kirim tawaran" }).click();
     await buyer.locator(".deal-card", { hasText: "Roasting kustom 2 Kg" }).getByText("Menunggu pembayaran").waitFor();
     check(true, "tawaran kustom muncul real-time di chat pembeli");
+
+    // Sengketa → moderator memutus (tanpa melihat chat).
+    const roast = buyer.locator(".deal-card", { hasText: "Roasting kustom 2 Kg" });
+    await dealAction(buyer, "Roasting kustom 2 Kg", "Bayar ke rekber");
+    await roast.getByText("Dana ditahan rekber").waitFor();
+    await seller.locator(".deal-card", { hasText: "Roasting kustom 2 Kg" }).getByRole("button", { name: "Tandai sudah dikirim" }).click();
+    await seller.getByLabel("Kurir / cara penyerahan").selectOption("Diantar langsung");
+    await seller.getByLabel("Keterangan serah terima").fill("Diserahkan langsung di Pasar Besar, 26 Okt 10.00");
+    await seller.getByRole("button", { name: "Tandai dikirim" }).click();
+    await roast.getByText("Sudah dikirim").waitFor();
+    await roast.getByRole("button", { name: "Ajukan sengketa" }).click();
+    await buyer.getByLabel("Alasan").selectOption("not_as_described");
+    await buyer.getByLabel("Ceritakan masalahnya").fill("Yang diterima roasting medium, bukan dark seperti disepakati.");
+    await buyer.getByRole("dialog").getByRole("button", { name: "Ajukan sengketa" }).click();
+    await roast.getByText("Sengketa", { exact: true }).waitFor();
+    check(await roast.getByText(/Alasan sengketa: Tidak sesuai deskripsi/).isVisible(), "alasan sengketa tampil di kartu");
+
+    const mod = await (await browser.newContext({ viewport: { width: 1280, height: 860 } })).newPage();
+    mod.on("pageerror", (e) => problems.push(`[mod] ${e.message}`));
+    await mod.goto(BASE);
+    await mod.getByLabel("Alias (nama samaran)").fill("Moderator_Satu");
+    await mod.locator("#pass").fill(PASS);
+    await mod.getByRole("button", { name: "Masuk" }).click();
+    await mod.getByRole("button", { name: "Moderasi sengketa" }).click();
+    await mod.getByText("Roasting kustom 2 Kg").waitFor();
+    check(await mod.getByText(/bukan dark seperti disepakati/).isVisible(), "moderator membaca pernyataan pembeli");
+    check(await mod.getByText(/Diserahkan langsung di Pasar Besar/).isVisible(), "moderator melihat bukti serah terima");
+    await mod.getByRole("button", { name: "Refund ke pembeli" }).click();
+    await mod.getByLabel(/alasan \(dibaca kedua pihak\)/).fill("Penjual tidak membantah perbedaan tingkat roasting.");
+    await mod.getByRole("button", { name: "Putuskan (final)" }).click();
+    await mod.getByText("Tidak ada sengketa terbuka.").waitFor();
+    await mod.screenshot({ path: join(OUT, "c5-moderator.png") });
+    await roast.getByText(/Putusan: dana dikembalikan ke pembeli/).waitFor();
+    check(await roast.getByText("Penjual tidak membantah perbedaan tingkat roasting.").isVisible(), "pembeli melihat putusan & alasannya real-time");
+    check(!(await buyer.getByRole("button", { name: "Moderasi sengketa" }).count()), "pengguna biasa tidak punya tombol moderasi");
 
     // Pembeli (non-PRO) menekan jabat tangan → diarahkan ke PRO, bukan error.
     await buyer.getByRole("button", { name: "Tawarkan kesepakatan rekber" }).click();

@@ -15,6 +15,7 @@ import {
 import { ApiError } from "../lib/api.ts";
 import { Modal, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+import { DisputeModal, DisputeThread, ResolutionNote, ShipmentInfo, ShipModal } from "./Disputes.tsx";
 
 export const rupiah = (n: number) => "Rp" + n.toLocaleString("id-ID");
 const newKey = () => crypto.randomUUID().replace(/-/g, "");
@@ -115,6 +116,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
   const [s, m] = useMessenger();
   const [pending, setPending] = useState<DealAction | null>(null);
   const [identity, setIdentity] = useState(false);
+  const [form, setForm] = useState<null | "ship" | "dispute">(null);
   const { busy, error, run } = useAction();
   const iAmBuyer = deal.buyerId === s.me.id;
   const st = STATUS[deal.status];
@@ -166,6 +168,9 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
           {deal.autoRefundAt && ` Dana kembali otomatis ke pembeli ${when(deal.autoRefundAt)} bila belum dikirim.`}
         </div>
       )}
+      <ShipmentInfo deal={deal} />
+      <ResolutionNote deal={deal} />
+      <DisputeThread deal={deal} peer={peer} myRole={iAmBuyer ? "buyer" : "seller"} />
       {deal.status === "DISPUTED" && (
         <div className="tiny" style={{ color: "var(--danger)" }}>
           {iAmBuyer ? "Kamu mengajukan sengketa. Diskusikan dengan penjual; dana tetap ditahan." : "Pembeli mengajukan sengketa. Dana ditahan sampai kamu mengembalikan dana atau pembeli menerima barang."}
@@ -181,7 +186,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
                 key={a}
                 className={`btn small ${"primary" in x && x.primary ? "primary" : ""} ${x.danger ? "danger" : ""}`}
                 disabled={busy}
-                onClick={() => (x.confirm ? setPending(a) : void act(a))}
+                onClick={() => (a === "ship" || a === "dispute" ? setForm(a) : x.confirm ? setPending(a) : void act(a))}
               >
                 {x.label}
               </button>
@@ -215,6 +220,8 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         </Modal>
       )}
       {identity && <IdentityModal peer={peer} peerAlias={peerAlias} onClose={() => setIdentity(false)} />}
+      {form === "ship" && <ShipModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
+      {form === "dispute" && <DisputeModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
     </div>
   );
 }

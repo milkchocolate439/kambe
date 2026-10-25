@@ -123,6 +123,78 @@ CREATE TABLE IF NOT EXISTS ledger (
 CREATE INDEX IF NOT EXISTS ledger_account ON ledger(account);
 CREATE INDEX IF NOT EXISTS ledger_ref ON ledger(ref);
 
+-- Fase 3: pernyataan sengketa (dikirim sadar ke moderator) & log audit keputusan moderator.
+CREATE TABLE IF NOT EXISTS deal_statements (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  deal_id     TEXT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  author_id   TEXT NOT NULL,
+  role        TEXT NOT NULL,
+  text        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS statements_deal ON deal_statements(deal_id, created_at);
+
+CREATE TABLE IF NOT EXISTS moderation_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  deal_id       TEXT NOT NULL,
+  moderator_id  TEXT NOT NULL,
+  decision      TEXT NOT NULL,
+  reason        TEXT NOT NULL,
+  created_at    INTEGER NOT NULL
+);
+
+-- Fase 3: PIN alternatif. kind 'shadow' = PIN sementara 24 jam; 'radar' = PIN khusus radar.
+-- Orang yang terhubung lewat PIN ini hanya pernah melihat PIN ini, bukan PIN utama.
+CREATE TABLE IF NOT EXISTS shadow_pins (
+  pin         TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL,
+  label       TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shadow_user ON shadow_pins(user_id, kind);
+
+-- Radar ekonomi: opt-in, kedaluwarsa sendiri, hanya terlihat oleh sesama peserta.
+CREATE TABLE IF NOT EXISTS radar_entries (
+  user_id     TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  sector      TEXT NOT NULL,
+  headline    TEXT NOT NULL,
+  pin         TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS radar_sector ON radar_entries(sector, expires_at);
+
+-- Fase 3: Path Moments — satu baris salinan terenkripsi per penerima.
+CREATE TABLE IF NOT EXISTS moments (
+  id          TEXT PRIMARY KEY,
+  author_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  author_key  TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS moments_author ON moments(author_id, created_at);
+CREATE INDEX IF NOT EXISTS moments_expiry ON moments(expires_at);
+
+CREATE TABLE IF NOT EXISTS moment_copies (
+  moment_id     TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+  recipient_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipient_key TEXT NOT NULL,
+  nonce         TEXT NOT NULL,
+  ciphertext    TEXT NOT NULL,
+  PRIMARY KEY (moment_id, recipient_id)
+);
+CREATE INDEX IF NOT EXISTS copies_recipient ON moment_copies(recipient_id);
+
+CREATE TABLE IF NOT EXISTS moment_reactions (
+  moment_id   TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji       TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (moment_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS subscriptions (
   ref         TEXT PRIMARY KEY,
   user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -139,7 +211,20 @@ function migrate(db: DatabaseSync) {
   const cols = (db.prepare("PRAGMA table_info(users)").all() as { name: string }[]).map((c) => c.name);
   if (!cols.includes("pro_until")) db.exec("ALTER TABLE users ADD COLUMN pro_until INTEGER NOT NULL DEFAULT 0");
   const dealCols = (db.prepare("PRAGMA table_info(deals)").all() as { name: string }[]).map((c) => c.name);
-  if (!dealCols.includes("disputed_at")) db.exec("ALTER TABLE deals ADD COLUMN disputed_at INTEGER");
+  const addDealCol = (name: string, def: string) => !dealCols.includes(name) && db.exec(`ALTER TABLE deals ADD COLUMN ${name} ${def}`);
+  addDealCol("disputed_at", "INTEGER");
+  addDealCol("courier", "TEXT");
+  addDealCol("tracking", "TEXT");
+  addDealCol("ship_note", "TEXT");
+  addDealCol("dispute_reason", "TEXT");
+  addDealCol("resolution", "TEXT");
+  addDealCol("resolution_reason", "TEXT");
+  addDealCol("resolved_by", "TEXT");
+  // PIN yang dipakai saat terhubung (shadow/radar) — itulah yang ditampilkan ke pihak pengundang.
+  for (const table of ["contacts", "contact_requests"]) {
+    const c = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((x) => x.name);
+    if (!c.includes("via_pin")) db.exec(`ALTER TABLE ${table} ADD COLUMN via_pin TEXT`);
+  }
 }
 
 export type DB = DatabaseSync;
@@ -152,15 +237,25 @@ export function openDb(path: string): DB {
   return db;
 }
 
-/** Jalankan fn dalam satu transaksi; rollback otomatis bila gagal. */
+const depth = new WeakMap<DB, number>();
+
+/**
+ * Jalankan fn dalam satu transaksi; rollback otomatis bila gagal. Boleh bersarang:
+ * level dalam memakai SAVEPOINT sehingga semuanya tetap satu kesatuan atomik.
+ */
 export function tx<T>(db: DB, fn: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
+  const level = depth.get(db) ?? 0;
+  const sp = `sp_${level}`;
+  db.exec(level === 0 ? "BEGIN IMMEDIATE" : `SAVEPOINT ${sp}`);
+  depth.set(db, level + 1);
   try {
     const out = fn();
-    db.exec("COMMIT");
+    db.exec(level === 0 ? "COMMIT" : `RELEASE ${sp}`);
     return out;
   } catch (err) {
-    db.exec("ROLLBACK");
+    db.exec(level === 0 ? "ROLLBACK" : `ROLLBACK TO ${sp}; RELEASE ${sp}`);
     throw err;
+  } finally {
+    depth.set(db, level);
   }
 }

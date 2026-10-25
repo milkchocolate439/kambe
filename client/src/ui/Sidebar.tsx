@@ -4,12 +4,14 @@ import { NOTE_MAX } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
 import { Avatar, copyText, Modal, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+import { RadarCard, ShadowPinModal } from "./Discovery.tsx";
 
 export function Sidebar() {
   return (
     <aside className="sidebar" aria-label="Kontak dan PIN">
       <MyPinCard />
       <InviteCard />
+      <RadarCard />
       <Requests />
       <Contacts />
     </aside>
@@ -19,6 +21,7 @@ export function Sidebar() {
 function MyPinCard() {
   const [s, m] = useMessenger();
   const [confirmRotate, setConfirmRotate] = useState(false);
+  const [shadow, setShadow] = useState(false);
   const [busy, setBusy] = useState(false);
 
   async function copy() {
@@ -76,6 +79,10 @@ function MyPinCard() {
         </div>
       </div>
       <div className="hint">PIN hanya untuk berbagi kontak — bukan kata sandi. Orang lain harus kamu setujui dulu.</div>
+      <button className="btn small block" style={{ marginTop: 10 }} onClick={() => setShadow(true)}>
+        <Icon name="clock" size={15} /> Shadow PIN sementara (24 jam)
+      </button>
+      {shadow && <ShadowPinModal onClose={() => setShadow(false)} />}
 
       {confirmRotate && (
         <Modal title="Ganti PIN?" onClose={() => setConfirmRotate(false)}>
@@ -201,6 +208,12 @@ function Requests() {
                     {r.from.pm && <div className="tiny muted truncate">{r.from.pm}</div>}
                   </div>
                 </div>
+                {r.via && (
+                  <div className="tiny" style={{ color: "var(--amber)" }}>
+                    <Icon name={r.via.kind === "radar" ? "store" : "clock"} size={12} /> Lewat {r.via.kind === "radar" ? "radar" : "Shadow PIN"} {r.via.pin}
+                    {r.via.label && r.via.kind === "shadow" ? ` (${r.via.label})` : ""} — dia tidak melihat PIN utamamu
+                  </div>
+                )}
                 {r.note && (
                   <div className="small" style={{ color: "var(--text-2)" }}>
                     “{r.note}”

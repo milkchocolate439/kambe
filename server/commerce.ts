@@ -13,6 +13,16 @@ import { randomUUID } from "node:crypto";
 import { tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Handler, type Row, type UserRow } from "./http.ts";
 import {
+  COURIERS,
+  DISPUTE_REASONS,
+  NO_TRACKING_COURIERS,
+  RESOLUTION_REASON_MIN,
+  SHIP_NOTE_MAX,
+  STATEMENT_MAX,
+  STATEMENTS_PER_PARTY,
+  TRACKING_RE,
+  type DisputeReason,
+  type ModDispute,
   MAX_PRODUCTS,
   PRICE_MAX,
   PRICE_MIN,
@@ -44,6 +54,8 @@ export interface CommerceDeps {
   getUser: (id: string) => UserRow | undefined;
   contactIds: (userId: string) => string[];
   timers: DealTimers;
+  isModerator: (u: UserRow) => boolean;
+  moderatorIds: () => string[];
 }
 
 /**
@@ -65,7 +77,7 @@ const HOUR = 60 * 60 * 1000;
 const OPEN_STATUSES: DealStatus[] = ["AWAITING_PAYMENT", "HELD", "SHIPPED", "DISPUTED"];
 const HELD_STATUSES: DealStatus[] = ["HELD", "SHIPPED", "DISPUTED"];
 
-type Actor = "buyer" | "seller" | "system";
+type Actor = "buyer" | "seller" | "system" | "moderator";
 type Table = Partial<Record<DealStatus, Partial<Record<DealAction, DealStatus>>>>;
 
 /** Tabel transisi: (pelaku, status sekarang, aksi) → status baru. Satu-satunya sumber kebenaran. */
@@ -87,7 +99,15 @@ const TRANSITIONS: Record<Actor, Table> = {
     HELD: { refund: "REFUNDED" }, // penjual tak pernah mengirim
     DISPUTED: { refund: "REFUNDED" }, // sengketa kedaluwarsa
   },
+  // Moderator HANYA bisa memutus sengketa — tidak bisa menyentuh kesepakatan lain.
+  moderator: {
+    DISPUTED: { refund: "REFUNDED", confirm: "COMPLETED" },
+  },
 };
+
+/** Kolom tambahan yang boleh ditulis bersama transisi (daftar putih — tidak ada nama kolom dari input). */
+const EXTRA_COLUMNS = ["courier", "tracking", "ship_note", "dispute_reason", "resolution", "resolution_reason", "resolved_by"] as const;
+type Extra = Partial<Record<(typeof EXTRA_COLUMNS)[number], string | null>>;
 
 export function registerCommerce(d: CommerceDeps) {
   const { db, route, authed } = d;
@@ -153,9 +173,12 @@ export function registerCommerce(d: CommerceDeps) {
     });
   }
 
-  function toDeal(r: Row, viewer: string, now = Date.now()): Deal {
+  function toDeal(r: Row, viewer: string, now = Date.now(), asModerator = false): Deal {
     const status = r.status as DealStatus;
-    const role = r.buyer_id === viewer ? "buyer" : "seller";
+    const role: Actor = asModerator ? "moderator" : r.buyer_id === viewer ? "buyer" : "seller";
+    const statements = (
+      db.prepare("SELECT role, text, created_at FROM deal_statements WHERE deal_id = ? ORDER BY created_at ASC, id ASC").all(r.id as string) as Row[]
+    ).map((s) => ({ role: s.role as "buyer" | "seller", text: s.text as string, createdAt: s.created_at as number }));
     const shippedAt = (r.shipped_at as number | null) ?? null;
     const paidAt = (r.paid_at as number | null) ?? null;
     const disputedAt = (r.disputed_at as number | null) ?? null;
@@ -180,6 +203,12 @@ export function registerCommerce(d: CommerceDeps) {
       autoRefundAt:
         status === "HELD" && paidAt ? paidAt + t.heldRefundMs : status === "DISPUTED" && disputedAt ? disputedAt + t.disputeTimeoutMs : null,
       actions: availableActions(role, r, now),
+      shipment: r.courier ? { courier: r.courier as string, tracking: (r.tracking as string | null) ?? null, note: (r.ship_note as string | null) ?? "" } : null,
+      disputeReason: (r.dispute_reason as DisputeReason | null) ?? null,
+      statements,
+      resolution: r.resolution
+        ? { decision: r.resolution as "refund" | "release", reason: (r.resolution_reason as string) ?? "", at: (r.closed_at as number) ?? (r.updated_at as number) }
+        : null,
     };
   }
 
@@ -198,7 +227,7 @@ export function registerCommerce(d: CommerceDeps) {
    * Jalankan satu transisi status secara atomik. Mengembalikan baris terbaru,
    * atau melempar 409 bila status sudah berubah (klik ganda / request paralel).
    */
-  function transition(dealId: string, actor: Actor, action: DealAction, now = Date.now()): Row {
+  function transition(dealId: string, actor: Actor, action: DealAction, now = Date.now(), extra: Extra = {}): Row {
     return tx(db, () => {
       const r = getDeal(dealId);
       if (!r) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
@@ -211,9 +240,11 @@ export function registerCommerce(d: CommerceDeps) {
 
       const stamp =
         action === "pay" ? "paid_at" : action === "ship" ? "shipped_at" : action === "dispute" ? "disputed_at" : ["confirm", "refund", "cancel"].includes(action) ? "closed_at" : null;
+      const extraCols = EXTRA_COLUMNS.filter((c) => c in extra);
+      const sets = ["status = ?", "updated_at = ?", ...(stamp ? [`${stamp} = ?`] : []), ...extraCols.map((c) => `${c} = ?`)];
       const { changes } = db
-        .prepare(`UPDATE deals SET status = ?, updated_at = ?${stamp ? `, ${stamp} = ?` : ""} WHERE id = ? AND status = ?`)
-        .run(...([to, now, ...(stamp ? [now] : []), dealId, from] as (string | number)[]));
+        .prepare(`UPDATE deals SET ${sets.join(", ")} WHERE id = ? AND status = ?`)
+        .run(...([to, now, ...(stamp ? [now] : []), ...extraCols.map((c) => extra[c] ?? null), dealId, from] as (string | number | null)[]));
       if (Number(changes) !== 1) throw new HttpError(409, "conflict", "Status kesepakatan sudah berubah. Muat ulang.");
 
       const p = r.price as number;
@@ -381,7 +412,23 @@ export function registerCommerce(d: CommerceDeps) {
     return { deals: rows.map((r) => toDeal(r, user.id)) };
   }));
 
-  route("POST", "/api/deals/:id/:action", authed(({ user, params }) => {
+  // Pernyataan sengketa untuk moderator (didaftarkan SEBELUM /:id/:action agar tidak tertangkap pola itu).
+  route("POST", "/api/deals/:id/statements", authed(async ({ req, user, params }) => {
+    const r = getDeal(params.id);
+    if (!r || (r.buyer_id !== user.id && r.seller_id !== user.id)) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
+    if (r.status !== "DISPUTED") throw new HttpError(409, "not_disputed", "Pernyataan hanya bisa dikirim saat sengketa berjalan");
+    const text = d.cleanText(d.str(await d.readJson(req), "text", { min: 1, max: STATEMENT_MAX * 2 })).slice(0, STATEMENT_MAX);
+    if (text.length < 5) throw new HttpError(400, "bad_statement", "Pernyataan terlalu pendek");
+    const role = r.buyer_id === user.id ? "buyer" : "seller";
+    const count = db.prepare("SELECT COUNT(*) AS n FROM deal_statements WHERE deal_id = ? AND author_id = ?").get(r.id as string, user.id) as { n: number };
+    if (count.n >= STATEMENTS_PER_PARTY) throw new HttpError(429, "too_many_statements", `Maksimal ${STATEMENTS_PER_PARTY} pernyataan per pihak`);
+    db.prepare("INSERT INTO deal_statements (deal_id, author_id, role, text, created_at) VALUES (?, ?, ?, ?, ?)").run(r.id as string, user.id, role, text, Date.now());
+    notifyDeal(r);
+    notifyModerators();
+    return toDeal(getDeal(params.id)!, user.id);
+  }));
+
+  route("POST", "/api/deals/:id/:action", authed(async ({ req, user, params }) => {
     const action = params.action as DealAction;
     if (!["pay", "ship", "confirm", "cancel", "refund", "dispute"].includes(action)) throw new HttpError(404, "not_found", "Aksi tidak dikenal");
     d.limit(`deal-action:${user.id}`, 120, HOUR, "Terlalu banyak aksi kesepakatan.");
@@ -393,9 +440,101 @@ export function registerCommerce(d: CommerceDeps) {
     if (action === "pay" && !d.areContacts(r.buyer_id as string, r.seller_id as string)) {
       throw new HttpError(409, "not_contacts", "Kalian tidak lagi terhubung — pembayaran dibatalkan demi keamanan");
     }
-    const updated = transition(params.id, role, action);
+    // Periksa hak lebih dulu (pesan jelas), baru validasi isi. transition() memeriksa ulang secara atomik.
+    if (!availableActions(role, r).includes(action)) {
+      const early = role === "buyer" && r.status === "HELD" && action === "refund";
+      throw new HttpError(409, "bad_transition", early ? "Penjual masih dalam batas waktu pengiriman. Tarik dana bisa dilakukan setelah batas itu lewat." : "Aksi ini tidak bisa dilakukan pada status kesepakatan sekarang");
+    }
+
+    let extra: Extra = {};
+    let statement: string | null = null;
+    if (action === "ship") {
+      // Bukti kirim WAJIB: dasar moderator memutus sengketa dan perlindungan penjual jujur.
+      const body = await d.readJson(req);
+      const courier = d.str(body, "courier", { min: 1, max: 60 });
+      if (!(COURIERS as readonly string[]).includes(courier)) throw new HttpError(400, "bad_courier", "Pilih kurir dari daftar");
+      const note = d.cleanText(d.str(body, "note", { max: SHIP_NOTE_MAX * 2, optional: true })).slice(0, SHIP_NOTE_MAX);
+      const rawTracking = d.str(body, "tracking", { max: 60, optional: true }).trim().toUpperCase();
+      if (NO_TRACKING_COURIERS.includes(courier)) {
+        if (note.length < 10) throw new HttpError(400, "note_required", "Jelaskan cara penyerahan (min. 10 karakter), mis. waktu & tempat serah terima");
+      } else if (!TRACKING_RE.test(rawTracking)) {
+        throw new HttpError(400, "bad_tracking", "Nomor resi wajib diisi (6–40 huruf/angka)");
+      }
+      extra = { courier, tracking: rawTracking || null, ship_note: note };
+    }
+    if (action === "dispute") {
+      const body = await d.readJson(req);
+      const reason = d.str(body, "reason", { min: 1, max: 40 });
+      if (!(reason in DISPUTE_REASONS)) throw new HttpError(400, "bad_reason", "Pilih alasan sengketa");
+      statement = d.cleanText(d.str(body, "text", { min: 1, max: STATEMENT_MAX * 2 })).slice(0, STATEMENT_MAX);
+      if (statement.length < 10) throw new HttpError(400, "bad_statement", "Ceritakan masalahnya (min. 10 karakter) agar moderator bisa menilai");
+      extra = { dispute_reason: reason };
+    }
+
+    const now = Date.now();
+    const updated = transition(params.id, role, action, now, extra);
+    if (statement) {
+      db.prepare("INSERT INTO deal_statements (deal_id, author_id, role, text, created_at) VALUES (?, ?, ?, ?, ?)").run(params.id, user.id, role, statement, now);
+      notifyModerators();
+    }
     notifyDeal(updated);
     return toDeal(updated, user.id);
+  }));
+
+  // -------------------------------------------------------- moderator ---
+
+  function notifyModerators() {
+    for (const id of d.moderatorIds()) d.emit(id, { t: "mod_queue_changed" });
+  }
+
+  function requireModerator(u: UserRow) {
+    if (!d.isModerator(u)) throw new HttpError(404, "not_found", "Endpoint tidak ditemukan"); // jangan bocorkan keberadaan panel moderator
+  }
+
+  function toModDispute(r: Row, mod: UserRow): ModDispute {
+    const buyer = d.getUser(r.buyer_id as string);
+    const seller = d.getUser(r.seller_id as string);
+    return {
+      deal: toDeal(r, mod.id, Date.now(), true),
+      buyer: { id: r.buyer_id as string, alias: buyer?.alias ?? "(akun dihapus)" },
+      seller: { id: r.seller_id as string, alias: seller?.alias ?? "(akun dihapus)" },
+    };
+  }
+
+  route("GET", "/api/mod/disputes", authed(({ user }) => {
+    requireModerator(user);
+    const open = db.prepare("SELECT * FROM deals WHERE status = 'DISPUTED' ORDER BY disputed_at ASC LIMIT 100").all() as Row[];
+    const recent = db
+      .prepare("SELECT * FROM deals WHERE resolution IS NOT NULL ORDER BY closed_at DESC LIMIT 20")
+      .all() as Row[];
+    return { open: open.map((r) => toModDispute(r, user)), resolved: recent.map((r) => toModDispute(r, user)) };
+  }));
+
+  route("POST", "/api/mod/disputes/:id/resolve", authed(async ({ req, user, params }) => {
+    requireModerator(user);
+    d.limit(`mod-resolve:${user.id}`, 60, HOUR, "Terlalu banyak keputusan dalam satu jam.");
+    const body = await d.readJson(req);
+    const decision = d.str(body, "decision", { min: 1, max: 10 });
+    if (decision !== "refund" && decision !== "release") throw new HttpError(400, "bad_decision", "Keputusan harus refund atau release");
+    const reason = d.cleanText(d.str(body, "reason", { min: 1, max: 1000 })).slice(0, 500);
+    if (reason.length < RESOLUTION_REASON_MIN) throw new HttpError(400, "reason_required", `Alasan keputusan wajib (min. ${RESOLUTION_REASON_MIN} karakter) — akan dibaca kedua pihak`);
+    const r = getDeal(params.id);
+    if (!r) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
+    // Konflik kepentingan: moderator tidak boleh memutus kesepakatannya sendiri.
+    if (r.buyer_id === user.id || r.seller_id === user.id) throw new HttpError(403, "conflict_of_interest", "Kamu terlibat dalam kesepakatan ini");
+    const now = Date.now();
+    const updated = tx(db, () => {
+      const out = transition(params.id, "moderator", decision === "refund" ? "refund" : "confirm", now, {
+        resolution: decision,
+        resolution_reason: reason,
+        resolved_by: user.id,
+      });
+      db.prepare("INSERT INTO moderation_log (deal_id, moderator_id, decision, reason, created_at) VALUES (?, ?, ?, ?, ?)").run(params.id, user.id, decision, reason, now);
+      return out;
+    });
+    notifyDeal(updated);
+    notifyModerators();
+    return toModDispute(updated, user);
   }));
 
   // ---------------------------------------------------------- dompet ---
@@ -429,11 +568,25 @@ export function registerCommerce(d: CommerceDeps) {
       ...(db.prepare("SELECT id FROM deals WHERE status = 'HELD' AND paid_at <= ?").all(now - t.heldRefundMs) as { id: string }[]).map(
         (r): [string, DealAction] => [r.id, "refund"],
       ),
-      ...(db.prepare("SELECT id FROM deals WHERE status = 'DISPUTED' AND disputed_at <= ?").all(now - t.disputeTimeoutMs) as { id: string }[]).map(
-        (r): [string, DealAction] => [r.id, "refund"],
-      ),
     ];
+    const expiredDisputes = db.prepare("SELECT id FROM deals WHERE status = 'DISPUTED' AND disputed_at <= ?").all(now - t.disputeTimeoutMs) as { id: string }[];
     const out = { released: 0, refunded: 0 };
+    for (const { id } of expiredDisputes) {
+      try {
+        // Dicatat sebagai putusan sistem agar kedua pihak tahu alasannya.
+        notifyDeal(
+          transition(id, "system", "refund", now, {
+            resolution: "refund",
+            resolution_reason: "Sengketa tidak terselesaikan dalam batas waktu — dana yang belum pernah cair dikembalikan ke pembeli.",
+            resolved_by: "system",
+          }),
+        );
+        out.refunded++;
+      } catch {
+        /* status berubah bersamaan — abaikan */
+      }
+    }
+    if (expiredDisputes.length) notifyModerators();
     for (const [id, action] of due) {
       try {
         notifyDeal(transition(id, "system", action, now));

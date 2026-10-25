@@ -6,6 +6,8 @@ import type { DealTimers } from "../server/commerce.ts";
 
 const key = () => crypto.randomUUID().replace(/-/g, "");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const SHIP = { courier: "JNE", tracking: "jne1234567890" };
+const DISPUTE = { reason: "not_received", text: "Paket belum sampai padahal status resi sudah terkirim." };
 
 /** Penjual PRO dengan satu produk + pembeli yang sudah terhubung. */
 async function market(opts: { dealTimers?: Partial<DealTimers> } = {}) {
@@ -91,7 +93,7 @@ test("alur rekber lengkap: harga dari server, dana ditahan, cair setelah konfirm
   assert.equal((await seller.get("/api/wallet")).body.incomingHeld, 828_750);
   assert.equal((await seller.get("/api/wallet")).body.balance, 0, "dana belum cair sebelum dikonfirmasi");
 
-  assert.equal((await seller.post(`/api/deals/${deal.id}/ship`)).body.status, "SHIPPED");
+  assert.equal((await seller.post(`/api/deals/${deal.id}/ship`, SHIP)).body.status, "SHIPPED");
   const done = (await buyer.post(`/api/deals/${deal.id}/confirm`)).body;
   assert.equal(done.status, "COMPLETED");
   assert.deepEqual(done.actions, []);
@@ -126,7 +128,7 @@ test("peran ditegakkan: pembeli tak bisa 'kirim', penjual tak bisa 'konfirmasi',
   const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
   assert.equal((await seller.post(`/api/deals/${deal.id}/pay`)).status, 409);
   await buyer.post(`/api/deals/${deal.id}/pay`);
-  assert.equal((await buyer.post(`/api/deals/${deal.id}/ship`)).status, 409);
+  assert.equal((await buyer.post(`/api/deals/${deal.id}/ship`, SHIP)).status, 409);
   assert.equal((await seller.post(`/api/deals/${deal.id}/confirm`)).status, 409);
   assert.equal((await buyer.post(`/api/deals/${deal.id}/hack`)).status, 404);
   const eve = new Client(base);
@@ -147,8 +149,8 @@ test("refund & sengketa: dana kembali utuh tanpa fee; sengketa bisa diselesaikan
 
   const d2 = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
   await buyer.post(`/api/deals/${d2.id}/pay`);
-  await seller.post(`/api/deals/${d2.id}/ship`);
-  const disputed = (await buyer.post(`/api/deals/${d2.id}/dispute`)).body;
+  await seller.post(`/api/deals/${d2.id}/ship`, SHIP);
+  const disputed = (await buyer.post(`/api/deals/${d2.id}/dispute`, DISPUTE)).body;
   assert.equal(disputed.status, "DISPUTED");
   assert.deepEqual(disputed.actions, ["confirm"]);
   assert.equal(disputed.autoReleaseAt, null, "sengketa menghentikan pencairan otomatis");
@@ -165,7 +167,7 @@ test("pencairan otomatis setelah dikirim bila pembeli diam (penjual tidak tersan
   const { app, seller, buyer, prod } = await market({ dealTimers: { autoReleaseMs: 50 } });
   const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
   await buyer.post(`/api/deals/${deal.id}/pay`);
-  const shipped = (await seller.post(`/api/deals/${deal.id}/ship`)).body;
+  const shipped = (await seller.post(`/api/deals/${deal.id}/ship`, SHIP)).body;
   assert.ok(shipped.autoReleaseAt >= shipped.shippedAt + 50);
   assert.equal(shipped.autoRefundAt, null, "setelah dikirim tidak ada refund otomatis");
   assert.equal(app.runTimers(shipped.shippedAt + 10).released, 0, "belum waktunya");
@@ -190,7 +192,7 @@ test("regresi red-team F1: penjual tak mengirim → pembeli bisa tarik dana sete
   assert.ok(list[0].actions.includes("refund"), "setelah lewat batas, tombol tarik dana tersedia");
   assert.equal((await buyer.post(`/api/deals/${deal.id}/refund`)).body.status, "REFUNDED");
   assert.equal((await buyer.get("/api/wallet")).body.outgoingHeld, 0);
-  assert.equal((await seller.post(`/api/deals/${deal.id}/ship`)).status, 409, "penjual tak bisa 'kirim' setelah dana ditarik");
+  assert.equal((await seller.post(`/api/deals/${deal.id}/ship`, SHIP)).status, 409, "penjual tak bisa 'kirim' setelah dana ditarik");
   assert.equal(app.audit().balanced, true);
   await app.close();
 });
@@ -213,8 +215,8 @@ test("regresi red-team F1: sengketa buntu berakhir — dana kembali ke pembeli",
   const { app, seller, buyer, prod } = await market();
   const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
   await buyer.post(`/api/deals/${deal.id}/pay`);
-  await seller.post(`/api/deals/${deal.id}/ship`);
-  const disputed = (await buyer.post(`/api/deals/${deal.id}/dispute`)).body;
+  await seller.post(`/api/deals/${deal.id}/ship`, SHIP);
+  const disputed = (await buyer.post(`/api/deals/${deal.id}/dispute`, DISPUTE)).body;
   assert.equal(disputed.autoReleaseAt, null);
   assert.ok(disputed.autoRefundAt > Date.now() + 13 * 86_400_000, "sengketa punya batas 14 hari");
   assert.deepEqual(app.runTimers(disputed.autoRefundAt - 1), { released: 0, refunded: 0 });

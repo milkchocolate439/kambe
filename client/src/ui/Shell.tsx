@@ -1,17 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { MomentsView } from "./Moments.tsx";
 import { useMessenger, Toasts, copyText } from "./common.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { Chat } from "./Chat.tsx";
 import { Settings } from "./Settings.tsx";
 import { StoreModal } from "./Commerce.tsx";
+import { ModModal } from "./Disputes.tsx";
 import { Icon } from "./icons.tsx";
 
 export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }) {
   const [s, m] = useMessenger();
   const [settings, setSettings] = useState(false);
   const [store, setStore] = useState(false);
+  const [mod, setMod] = useState(false);
   const [reclaiming, setReclaiming] = useState(false);
+  const [moments, setMoments] = useState(false);
   const unreadTotal = s.contacts.reduce((n, c) => n + c.unread, 0) + s.incoming.length;
+  // Membuka obrolan dari daftar kontak otomatis keluar dari tampilan Moments.
+  useEffect(() => {
+    if (s.activePeer) setMoments(false);
+  }, [s.activePeer]);
 
   return (
     <div className="app">
@@ -37,6 +45,23 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
           <span className={`dot ${s.conn}`} />
           <span className="hide-mobile">{s.conn === "online" ? "Tersambung" : s.conn === "connecting" ? "Menyambung…" : "Offline"}</span>
         </span>
+        <button
+          className={`btn ${moments ? "primary" : "ghost"} icon`}
+          onClick={() => {
+            void m.openThread(null);
+            setMoments(!moments);
+          }}
+          aria-label="Moments"
+          aria-pressed={moments}
+          title="Path Moments"
+        >
+          <Icon name="planet" />
+        </button>
+        {s.me.isModerator && (
+          <button className="btn ghost icon" onClick={() => setMod(true)} aria-label="Moderasi sengketa" title="Moderasi sengketa" style={{ color: "var(--brand-2)" }}>
+            <Icon name="shieldCheck" />
+          </button>
+        )}
         <button className="btn ghost icon" onClick={() => setStore(true)} aria-label="Toko & Dompet" title="Toko & Dompet (simulasi)" style={{ color: s.pro?.active ? "var(--amber)" : undefined }}>
           <Icon name={s.pro?.active ? "crown" : "store"} />
         </button>
@@ -77,13 +102,14 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
         </div>
       )}
 
-      <div className={`layout ${s.activePeer ? "chat-open" : ""}`}>
+      <div className={`layout ${s.activePeer || moments ? "chat-open" : ""}`}>
         <Sidebar />
-        <Chat />
+        {moments ? <MomentsView onBack={() => setMoments(false)} /> : <Chat />}
       </div>
 
       {settings && <Settings onClose={() => setSettings(false)} onSignedOut={onSignedOut} />}
       {store && <StoreModal onClose={() => setStore(false)} />}
+      {mod && <ModModal onClose={() => setMod(false)} />}
       <Toasts toasts={s.toasts} />
     </div>
   );

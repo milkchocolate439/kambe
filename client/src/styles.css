@@ -221,6 +221,12 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .bubble.identity { background: var(--amber-bg); color: var(--text); border: 1px dashed var(--amber); }
 .identity-head { display: flex; gap: 6px; align-items: center; font-size: 11.5px; font-weight: 800; letter-spacing: 0.05em; color: var(--amber); margin-bottom: 4px; }
 
+/* Path Moments: garis linimasa vertikal dengan titik ikon */
+.timeline { position: relative; padding-left: 28px; display: flex; flex-direction: column; gap: 12px; }
+.timeline::before { content: ""; position: absolute; left: 12px; top: 4px; bottom: 4px; width: 2px; background: color-mix(in srgb, var(--rose) 45%, transparent); border-radius: 2px; }
+.moment { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; }
+.moment-dot { position: absolute; left: -31px; top: 14px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; border: 3px solid var(--bg); }
+
 .composer { flex-shrink: 0; display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px calc(10px + var(--safe-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
 .composer .textarea { resize: none; max-height: 160px; min-height: 44px; line-height: 1.4; }
 

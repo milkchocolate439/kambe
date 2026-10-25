@@ -6,6 +6,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { openDb, tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Ctx, type Handler, type Row, type UserRow } from "./http.ts";
 import { registerCommerce, type DealTimers } from "./commerce.ts";
+import { registerDiscovery } from "./discovery.ts";
+import { registerMoments } from "./moments.ts";
 import {
   RateLimiter,
   burnTime,
@@ -47,6 +49,8 @@ export interface AppOptions {
   allowedOrigins?: string[];
   /** Tenggat rekber (lihat DealTimers). Default: cair 7 hr, batas kirim 3 hr, refund HELD 7 hr, sengketa 14 hr. */
   dealTimers?: Partial<DealTimers>;
+  /** ID akun (UUID) moderator sengketa. Kosong = tidak ada moderator. */
+  moderators?: string[];
   log?: (msg: string) => void;
 }
 
@@ -94,6 +98,13 @@ export function createApp(opts: AppOptions) {
   };
 
   const getUser = (id: string) => q.userById.get(id) as UserRow | undefined;
+  // Moderator ditentukan oleh ID akun (UUID acak buatan server), BUKAN alias: alias yang belum
+  // terdaftar bisa diserobot siapa pun lewat pendaftaran (temuan audit Fase 3 #1).
+  const moderatorIdSet = new Set((opts.moderators ?? []).filter((id) => UUID_RE.test(id)));
+  for (const bad of (opts.moderators ?? []).filter((id) => !UUID_RE.test(id))) {
+    log(`[peringatan] PINPATH_MODERATORS: "${bad}" bukan ID akun (UUID) — diabaikan. Cari ID dengan: node --import tsx scripts/moderator-id.ts <alias>`);
+  }
+  const isModerator = (u: UserRow) => moderatorIdSet.has(u.id);
 
   function toMe(u: UserRow): Me {
     return {
@@ -104,6 +115,7 @@ export function createApp(opts: AppOptions) {
       pm: u.pm,
       readReceipts: u.read_receipts === 1,
       createdAt: u.created_at,
+      isModerator: isModerator(u),
     };
   }
 
@@ -191,14 +203,15 @@ export function createApp(opts: AppOptions) {
     res.setHeader("Set-Cookie", sessionCookie(token, SESSION_TTL_MS));
   }
 
-  async function readJson(req: IncomingMessage): Promise<Row> {
+  /** Batas default 32 KB; endpoint tertentu (mis. momen = banyak salinan terenkripsi) boleh meminta lebih. */
+  async function readJson(req: IncomingMessage, maxBytes = BODY_LIMIT): Promise<Row> {
     const type = req.headers["content-type"] ?? "";
     if (!type.startsWith("application/json")) throw new HttpError(415, "bad_content_type", "Gunakan application/json");
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req) {
       size += (chunk as Buffer).length;
-      if (size > BODY_LIMIT) throw new HttpError(413, "too_large", "Permintaan terlalu besar");
+      if (size > maxBytes) throw new HttpError(413, "too_large", "Permintaan terlalu besar");
       chunks.push(chunk as Buffer);
     }
     try {
@@ -230,12 +243,24 @@ export function createApp(opts: AppOptions) {
       .trim();
   }
 
+  /** PIN unik di seluruh ruang PIN (utama + shadow + radar). */
   function uniquePin(): string {
     for (let i = 0; i < 20; i++) {
       const pin = generatePin();
-      if (!q.userByPin.get(pin)) return pin;
+      if (!q.userByPin.get(pin) && !db.prepare("SELECT 1 FROM shadow_pins WHERE pin = ?").get(pin)) return pin;
     }
     throw new HttpError(503, "pin_exhausted", "Gagal membuat PIN unik, coba lagi");
+  }
+
+  /** Cari pemilik PIN: PIN utama, atau Shadow/radar PIN yang MASIH aktif. */
+  function resolvePin(pin: string): { user: UserRow; via: { pin: string; kind: "shadow" | "radar"; label: string } | null } | null {
+    const direct = q.userByPin.get(pin) as UserRow | undefined;
+    if (direct) return { user: direct, via: null };
+    const sp = db.prepare("SELECT user_id, kind, label FROM shadow_pins WHERE pin = ? AND expires_at > ?").get(pin, Date.now()) as
+      | { user_id: string; kind: "shadow" | "radar"; label: string }
+      | undefined;
+    const owner = sp && getUser(sp.user_id);
+    return owner ? { user: owner, via: { pin, kind: sp.kind, label: sp.label } } : null;
   }
 
   function messageStatus(m: Row, recipientReadReceipts: boolean): DeliveryStatus {
@@ -417,7 +442,7 @@ export function createApp(opts: AppOptions) {
     limit(`pin-rotate:${user.id}`, 5, 24 * HOUR, "PIN sudah terlalu sering diganti hari ini.");
     db.prepare("UPDATE users SET pin = ? WHERE id = ?").run(uniquePin(), user.id);
     // Undangan tertunda ke PIN lama ikut dibatalkan — itulah gunanya ganti PIN saat kena spam.
-    db.prepare("DELETE FROM contact_requests WHERE to_id = ?").run(user.id);
+    db.prepare("DELETE FROM contact_requests WHERE to_id = ? AND via_pin IS NULL").run(user.id); // undangan lewat shadow/radar tetap
     for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
     return { me: toMe(getUser(user.id)!) };
   }));
@@ -444,7 +469,7 @@ export function createApp(opts: AppOptions) {
     const contacts = (
       db
         .prepare(
-          `SELECT u.id, u.alias, u.pin, u.public_key, u.pm, c.since,
+          `SELECT u.id, u.alias, COALESCE(c.via_pin, u.pin) AS pin, u.public_key, u.pm, c.since,
              (SELECT COUNT(*) FROM messages m WHERE m.sender_id = u.id AND m.recipient_id = c.user_id AND m.read_at IS NULL) AS unread,
              (SELECT MAX(m.created_at) FROM messages m
                 WHERE (m.sender_id = u.id AND m.recipient_id = c.user_id) OR (m.sender_id = c.user_id AND m.recipient_id = u.id)) AS last_at
@@ -468,8 +493,9 @@ export function createApp(opts: AppOptions) {
     const incoming = (
       db
         .prepare(
-          `SELECT r.id, r.note, r.created_at, u.id AS uid, u.alias, u.pin, u.pm
+          `SELECT r.id, r.note, r.created_at, r.via_pin, s.kind AS via_kind, s.label AS via_label, u.id AS uid, u.alias, u.pin, u.pm
            FROM contact_requests r JOIN users u ON u.id = r.from_id
+           LEFT JOIN shadow_pins s ON s.pin = r.via_pin
            WHERE r.to_id = ? ORDER BY r.created_at DESC`,
         )
         .all(userId) as Row[]
@@ -478,11 +504,15 @@ export function createApp(opts: AppOptions) {
       from: { id: r.uid as string, alias: r.alias as string, pin: r.pin as string, pm: r.pm as string },
       note: r.note as string,
       createdAt: r.created_at as number,
+      via: r.via_pin
+        ? { pin: r.via_pin as string, kind: ((r.via_kind as string | null) ?? "shadow") as "shadow" | "radar", label: (r.via_label as string | null) ?? "" }
+        : null,
     }));
+    // Pengundang hanya melihat PIN yang ia ketik — PIN utama target tidak pernah bocor lewat shadow/radar.
     const outgoing = (
       db
         .prepare(
-          `SELECT r.id, r.created_at, u.pin FROM contact_requests r JOIN users u ON u.id = r.to_id
+          `SELECT r.id, r.created_at, COALESCE(r.via_pin, u.pin) AS pin FROM contact_requests r JOIN users u ON u.id = r.to_id
            WHERE r.from_id = ? ORDER BY r.created_at DESC`,
         )
         .all(userId) as Row[]
@@ -490,10 +520,11 @@ export function createApp(opts: AppOptions) {
     return { contacts, incoming, outgoing };
   }
 
-  function connect(a: string, b: string) {
+  /** Hubungkan a↔b. viaAB = PIN yang dipakai a untuk menjangkau b (ditampilkan ke a), dan sebaliknya. */
+  function connect(a: string, b: string, viaAB: string | null = null, viaBA: string | null = null) {
     const now = Date.now();
     tx(db, () => {
-      db.prepare("INSERT OR IGNORE INTO contacts (user_id, peer_id, since) VALUES (?, ?, ?), (?, ?, ?)").run(a, b, now, b, a, now);
+      db.prepare("INSERT OR IGNORE INTO contacts (user_id, peer_id, since, via_pin) VALUES (?, ?, ?, ?), (?, ?, ?, ?)").run(a, b, now, viaAB, b, a, now, viaBA);
       db.prepare("DELETE FROM contact_requests WHERE (from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)").run(a, b, b, a);
     });
   }
@@ -507,17 +538,32 @@ export function createApp(opts: AppOptions) {
     if (!isValidPin(pin)) throw new HttpError(400, "bad_pin", "Format PIN tidak valid");
     // Batas ketat pencarian PIN = pertahanan utama terhadap pemindaian massal.
     limit(`pin-lookup:${user.id}`, 30, HOUR, "Terlalu banyak pencarian PIN. Coba lagi dalam satu jam.");
-    const target = q.userByPin.get(pin) as UserRow | undefined;
-    if (!target) throw new HttpError(404, "pin_not_found", "PIN tidak ditemukan. Periksa lagi ketikannya.");
+    const found = resolvePin(pin);
+    if (!found) throw new HttpError(404, "pin_not_found", "PIN tidak ditemukan atau sudah kedaluwarsa. Periksa lagi ketikannya.");
+    const target = found.user;
+    const viaPin = found.via?.pin ?? null;
     if (target.id === user.id) throw new HttpError(400, "self_invite", "Itu PIN kamu sendiri");
-    if (q.isContact.get(user.id, target.id)) throw new HttpError(409, "already_contacts", "Kalian sudah terhubung");
+    const existingContact = db.prepare("SELECT via_pin FROM contacts WHERE user_id = ? AND peer_id = ?").get(user.id, target.id) as
+      | { via_pin: string | null }
+      | undefined;
+    if (existingContact) {
+      // Kontak yang datang lewat Shadow/radar PIN tidak boleh bisa "memastikan" tebakan PIN utama
+      // dari beda jawaban 409 vs 404 (temuan audit Fase 3 #3): PIN lain milik orang itu = "tidak ditemukan".
+      if (existingContact.via_pin && existingContact.via_pin !== pin) {
+        throw new HttpError(404, "pin_not_found", "PIN tidak ditemukan atau sudah kedaluwarsa. Periksa lagi ketikannya.");
+      }
+      throw new HttpError(409, "already_contacts", "Kalian sudah terhubung");
+    }
 
     // Diblokir? Pura-pura terkirim — pemblokir tidak boleh "ketahuan" memblokir.
     if (q.isBlocked.get(user.id, target.id, target.id, user.id)) return { status: "pending" };
 
     // Kalau dia sudah lebih dulu mengundang kita, langsung terhubung (dua-duanya mau).
-    if (db.prepare("SELECT 1 FROM contact_requests WHERE from_id = ? AND to_id = ?").get(target.id, user.id)) {
-      connect(user.id, target.id);
+    const reverse = db.prepare("SELECT via_pin FROM contact_requests WHERE from_id = ? AND to_id = ?").get(target.id, user.id) as
+      | { via_pin: string | null }
+      | undefined;
+    if (reverse) {
+      connect(user.id, target.id, viaPin, reverse.via_pin);
       emit(target.id, { t: "contacts_changed" });
       emit(user.id, { t: "contacts_changed" });
       return { status: "connected" };
@@ -529,12 +575,13 @@ export function createApp(opts: AppOptions) {
 
     const existing = db.prepare("SELECT 1 FROM contact_requests WHERE from_id = ? AND to_id = ?").get(user.id, target.id);
     if (!existing) {
-      db.prepare("INSERT INTO contact_requests (id, from_id, to_id, note, created_at) VALUES (?, ?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO contact_requests (id, from_id, to_id, note, created_at, via_pin) VALUES (?, ?, ?, ?, ?, ?)").run(
         randomUUID(),
         user.id,
         target.id,
         note,
         Date.now(),
+        viaPin,
       );
       emit(target.id, { t: "contacts_changed" });
     }
@@ -542,11 +589,11 @@ export function createApp(opts: AppOptions) {
   }));
 
   route("POST", "/api/contacts/requests/:id/accept", authed(({ user, params }) => {
-    const r = db.prepare("SELECT from_id FROM contact_requests WHERE id = ? AND to_id = ?").get(params.id, user.id) as
-      | { from_id: string }
+    const r = db.prepare("SELECT from_id, via_pin FROM contact_requests WHERE id = ? AND to_id = ?").get(params.id, user.id) as
+      | { from_id: string; via_pin: string | null }
       | undefined;
     if (!r) throw new HttpError(404, "not_found", "Undangan tidak ditemukan");
-    connect(user.id, r.from_id);
+    connect(r.from_id, user.id, r.via_pin, null);
     emit(r.from_id, { t: "contacts_changed" });
     return contactsFor(user.id);
   }));
@@ -648,7 +695,14 @@ export function createApp(opts: AppOptions) {
       disputeTimeoutMs: 14 * 24 * HOUR,
       ...opts.dealTimers,
     },
+    isModerator,
+    moderatorIds: () => [...moderatorIdSet],
   });
+
+  // ---- Fase 3: Shadow PIN & radar ekonomi (opt-in) ----
+
+  const discovery = registerDiscovery({ db, route, authed, readJson, str, cleanText, limit, uniquePin });
+  const moments = registerMoments({ db, route, authed, readJson, limit, emit, getUser, areContacts });
 
   // ------------------------------------------------------- static files ---
 
@@ -923,6 +977,8 @@ export function createApp(opts: AppOptions) {
 
   const janitor = setInterval(() => {
     db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(Date.now());
+    discovery.sweep();
+    moments.sweep();
     limiter.sweep(24 * HOUR);
   }, 10 * 60 * 1000);
   const releaser = setInterval(() => {
@@ -941,6 +997,11 @@ export function createApp(opts: AppOptions) {
     server,
     db,
     runTimers: commerce.runTimers,
+    /** Ganti daftar moderator (ID akun) saat berjalan — dipakai tes; produksi memakai env saat start. */
+    setModerators(ids: string[]) {
+      moderatorIdSet.clear();
+      for (const id of ids) if (UUID_RE.test(id)) moderatorIdSet.add(id);
+    },
     audit: commerce.audit,
     async close() {
       clearInterval(heartbeat);

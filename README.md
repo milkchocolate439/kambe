@@ -24,6 +24,7 @@ Variabel lingkungan (opsional):
 | `PINPATH_SECURE` | – | `1` di balik HTTPS → cookie `Secure` + HSTS |
 | `PINPATH_TRUST_PROXY` | – | `1` hanya bila di belakang reverse proxy milik sendiri |
 | `PINPATH_ORIGINS` | – | Daftar Origin yang diizinkan (koma). Kosong = harus sama dengan Host |
+| `PINPATH_MODERATORS` | – | **ID akun** (UUID) moderator sengketa, dipisah koma. Cari ID: `node --import tsx scripts/moderator-id.ts <alias>`. Alias sengaja tidak diterima (bisa diserobot lewat pendaftaran) |
 
 > Catatan Kali/WSL: Node dari paket Kali dikompilasi tanpa dukungan TypeScript, jadi semua
 > skrip memakai `node --import tsx`.
@@ -31,9 +32,9 @@ Variabel lingkungan (opsional):
 ## Pengujian
 
 ```bash
-pnpm test           # 49 tes: kriptografi + API/WebSocket + uang/rekber (server sungguhan, DB di memori),
-                    # termasuk regresi temuan red-team (DoS frame WS, injeksi event, oracle ID, kunci low-order)
-pnpm build && pnpm test:browser   # 21 + 17 pemeriksaan di Chromium headless (chat & dagang), 2 pengguna
+pnpm test           # 73 tes: kriptografi, API/WebSocket, uang/rekber, sengketa/moderator, Shadow PIN/radar, Moments
+                    # (server sungguhan, DB di memori), termasuk regresi semua temuan red-team
+pnpm build && pnpm test:browser   # 3 suite Chromium headless: chat (21), dagang+moderator (24), Fase 3 (14)
 ```
 
 Tes browser mencakup: undangan PIN, chat E2EE, status D/R, PING!!!, safety number,
@@ -93,9 +94,33 @@ dan apakah sebuah pesan adalah PING (untuk rate limit). Catatan undangan tidak t
 - Hapus akun ditolak selama ada kesepakatan terbuka (dana pihak lain tidak ikut hilang). Diblokir di tengah jalan:
   pembayaran ditolak, tapi refund/konfirmasi tetap bisa.
 
+## Fase 3 — Moderator sengketa, Shadow PIN, Radar, Path Moments
+
+**Bukti kirim & moderator**
+- "Kirim" wajib bukti: kurir dari daftar + nomor resi (6–40 huruf/angka), atau keterangan serah terima untuk
+  "Diantar langsung"/"Jasa digital". Bukti terlihat pembeli & moderator.
+- Sengketa wajib alasan (tidak diterima / tidak sesuai / rusak / lainnya) + cerita. Kedua pihak bisa menambah
+  maks. 5 pernyataan — **dibaca moderator, tidak terenkripsi E2EE** (diberi label jelas di UI).
+- Moderator (`PINPATH_MODERATORS=<id-akun>,…`) melihat data kesepakatan, bukti kirim, dan pernyataan —
+  **bukan isi chat**. Putusan refund/cairkan wajib alasan (dibaca kedua pihak), final, atomik, tercatat di
+  `moderation_log`. Moderator tidak bisa memutus kesepakatannya sendiri; panel tersembunyi (404) bagi pengguna biasa.
+- Sengketa yang kedaluwarsa (14 hari) dicatat sebagai putusan sistem yang bisa dibaca kedua pihak.
+
+**Shadow PIN (24 jam)** — PIN sementara untuk orang asing; maks. 3 aktif; bisa dicabut (undangan tertunda ikut hangus).
+Yang terhubung lewat Shadow PIN **tidak pernah melihat PIN utama** (kontak menampilkan PIN yang dipakai saat terhubung).
+
+**Radar ekonomi (opt-in, default mati)** — tampil 7 hari per sektor dengan kebutuhan/tawaran; hanya sesama peserta yang
+bisa melihat (resiprokal, anti-pengintip pasif); memakai **PIN radar khusus**; tanpa id internal; peserta yang diblokir
+atau sudah jadi kontak tidak tampil; keluar radar = PIN radar mati.
+
+**Path Moments (E2EE)** — pikiran/musik/tempat (nama, bukan GPS)/bangun/tidur. Setiap momen **dienkripsi terpisah
+untuk tiap kontak** + salinan diri sendiri (`deriveSelfKey`), saluran AAD `moment` terpisah dari `msg` (ciphertext tidak
+bisa dipindah antar-saluran). Hanya kontak saat ini yang melihat; kontak dengan safety number berubah yang belum ditinjau
+tidak ikut dikirimi; terhapus otomatis setelah 30 hari. Reaksi 😊😮❤️ adalah metadata yang terlihat server.
+
 ## Roadmap
 
-- **Fase 2b**: Double Ratchet (forward secrecy) + riwayat disimpan lokal di perangkat; lampiran terenkripsi.
-- **Fase 3 tambahan**: moderator/admin untuk menengahi sengketa.
+- **Fase 2b**: Double Ratchet (forward secrecy) + riwayat disimpan lokal di perangkat; lampiran terenkripsi (foto bukti sengketa).
+- **Fase 4**: APK (Capacitor), payment gateway berizin, notifikasi push.
 - **Fase 3**: Path Moments, Radar opt-in (default mati), Shadow PIN 24 jam.
 - **Fase 4**: APK (Capacitor), payment gateway berizin (escrow/rekber memegang dana publik butuh izin BI + KYC/AML).

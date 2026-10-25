@@ -1,6 +1,8 @@
 import {
   decryptPayload,
   deriveConversationKey,
+  deriveSelfKey,
+  type MomentType,
   E2EEError,
   encryptPayload,
   generateIdentity,
@@ -18,6 +20,12 @@ import {
   type DealAction,
   type IncomingRequest,
   type Me,
+  type ModDispute,
+  type MyRadar,
+  type RadarEntry,
+  type ShadowPin,
+  type Reaction,
+  type StoredMoment,
   type OutgoingRequest,
   type Product,
   type ProStatus,
@@ -51,6 +59,22 @@ export interface Thread {
   hasMore: boolean;
 }
 
+export interface MomentView {
+  id: string;
+  authorId: string;
+  authorAlias: string;
+  mine: boolean;
+  /** locked = untuk kunci perangkat lain; broken = gagal dibuka */
+  state: "ok" | "locked" | "broken";
+  type: MomentType;
+  text: string;
+  untrusted: boolean;
+  createdAt: number;
+  expiresAt: number;
+  reactions: Record<Reaction, number>;
+  myReaction: Reaction | null;
+}
+
 export interface Toast {
   id: number;
   text: string;
@@ -76,6 +100,13 @@ export interface State {
   catalogs: Record<string, { pro: boolean; products: Product[] }>;
   deals: Record<string, Deal[]>;
   wallet: Wallet | null;
+  // Fase 3 — moderator sengketa
+  modQueue: { open: ModDispute[]; resolved: ModDispute[] } | null;
+  // Fase 3 — penemuan aman
+  shadowPins: ShadowPin[] | null;
+  myRadar: MyRadar | null | undefined; // undefined = belum dimuat
+  radarEntries: RadarEntry[] | null;
+  moments: MomentView[] | null;
 }
 
 const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3 };
@@ -113,6 +144,11 @@ export class Messenger {
       catalogs: {},
       deals: {},
       wallet: null,
+      modQueue: null,
+      shadowPins: null,
+      myRadar: undefined,
+      radarEntries: null,
+      moments: null,
     };
     this.rt = new Realtime(
       (ev) => void this.onEvent(ev),
@@ -337,6 +373,7 @@ export class Messenger {
     try {
       const env: Envelope = { id: m.id, from: { id: m.from, publicKey: m.fromKey }, to: { id: m.to, publicKey: m.toKey } };
       const p = await decryptPayload(await this.conversationKey(myKey, peer, peerKey), env, m.nonce, m.ciphertext);
+      if (p.kind === "moment") throw new E2EEError("bad_payload", "Format pesan tidak dikenal"); // mustahil di saluran "msg"; jaga-jaga
       return { ...base, kind: p.kind, text: p.kind === "ping" ? "" : p.text, untrusted };
     } catch (e) {
       return { ...base, kind: "broken", text: "", error: e instanceof E2EEError ? e.message : "Pesan tidak bisa dibuka", untrusted };
@@ -443,11 +480,132 @@ export class Messenger {
     return deal;
   }
 
-  async dealAction(peer: string, dealId: string, action: DealAction) {
-    const deal = await api<Deal>("POST", `/api/deals/${dealId}/${action}`);
+  /** `body` wajib untuk "ship" (bukti kirim) dan "dispute" (alasan + cerita). */
+  async dealAction(peer: string, dealId: string, action: DealAction, body?: Record<string, string>) {
+    const deal = await api<Deal>("POST", `/api/deals/${dealId}/${action}`, body);
     this.upsertDeal(peer, deal);
     if (this.state.wallet) void this.loadWallet();
     return deal;
+  }
+
+  async addStatement(peer: string, dealId: string, text: string) {
+    const deal = await api<Deal>("POST", `/api/deals/${dealId}/statements`, { text });
+    this.upsertDeal(peer, deal);
+    return deal;
+  }
+
+  // ------------------------------------------------ Path Moments (Fase 3) ---
+
+  private async openMoment(m: StoredMoment): Promise<MomentView> {
+    const meId = this.state.me.id;
+    const mine = m.authorId === meId;
+    const base = { id: m.id, authorId: m.authorId, authorAlias: m.authorAlias, mine, createdAt: m.createdAt, expiresAt: m.expiresAt, reactions: m.reactions, myReaction: m.myReaction };
+    const myKey = this.identity?.publicKey;
+    if (!this.identity || m.copy.toKey !== myKey) return { ...base, state: "locked", type: "thought", text: "", untrusted: false };
+    const pinned = this.state.pins[m.authorId]?.publicKey;
+    const untrusted = !mine && !!pinned && pinned !== m.authorKey;
+    try {
+      const author = { id: m.authorId, publicKey: m.authorKey };
+      const me = { id: meId, publicKey: myKey };
+      const key = mine ? await deriveSelfKey(this.identity.privateKey, me) : await this.conversationKey(myKey, m.authorId, m.authorKey);
+      const p = await decryptPayload(key, { id: m.id, from: author, to: mine ? author : me }, m.copy.nonce, m.copy.ciphertext, "moment");
+      if (p.kind !== "moment") throw new Error("bukan momen");
+      return { ...base, state: "ok", type: p.type, text: p.text, untrusted };
+    } catch {
+      return { ...base, state: "broken", type: "thought", text: "", untrusted };
+    }
+  }
+
+  async loadMoments() {
+    const { moments } = await api<{ moments: StoredMoment[] }>("GET", "/api/moments");
+    this.set({ moments: await Promise.all(moments.map((m) => this.openMoment(m))) });
+  }
+
+  /** Enkripsi momen untuk setiap kontak (yang kuncinya sudah diakui) + salinan diri sendiri. */
+  async postMoment(type: MomentType, text: string): Promise<number> {
+    if (this.state.device !== "ok" || !this.identity) throw new ApiError(409, "device", "Perangkat ini belum aktif untuk akunmu");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await this.refreshContacts();
+      const myKey = this.identity.publicKey;
+      const me = { id: this.state.me.id, publicKey: myKey };
+      const id = crypto.randomUUID();
+      const payload = { kind: "moment" as const, type, text };
+      // Kontak dengan safety number berubah yang belum ditinjau TIDAK ikut dikirimi (bisa jadi penyusup).
+      const recipients = this.state.contacts.filter((c) => c.publicKey && !this.state.keyAlerts[c.id]);
+      const copies = [
+        { to: me.id, toKey: myKey, ...(await encryptPayload(await deriveSelfKey(this.identity.privateKey, me), { id, from: me, to: me }, payload, "moment")) },
+        ...(await Promise.all(
+          recipients.map(async (c) => {
+            const them = { id: c.id, publicKey: c.publicKey! };
+            return { to: c.id, toKey: them.publicKey, ...(await encryptPayload(await this.conversationKey(myKey, c.id, them.publicKey), { id, from: me, to: them }, payload, "moment")) };
+          }),
+        )),
+      ];
+      try {
+        await api("POST", "/api/moments", { id, fromKey: myKey, copies });
+        await this.loadMoments();
+        return recipients.length;
+      } catch (e) {
+        if (attempt === 0 && e instanceof ApiError && e.code === "key_changed") continue; // kunci kontak berubah di tengah jalan → muat ulang & coba sekali lagi
+        throw e;
+      }
+    }
+    return 0;
+  }
+
+  async reactMoment(id: string, emoji: Reaction | null) {
+    await api("POST", `/api/moments/${id}/react`, { emoji });
+    await this.loadMoments();
+  }
+
+  async deleteMoment(id: string) {
+    await api("DELETE", `/api/moments/${id}`);
+    this.set({ moments: (this.state.moments ?? []).filter((m) => m.id !== id) });
+  }
+
+  // ------------------------------------------- Shadow PIN & radar (Fase 3) ---
+
+  async loadShadowPins() {
+    this.set({ shadowPins: (await api<{ pins: ShadowPin[] }>("GET", "/api/shadow-pins")).pins });
+  }
+
+  async createShadowPin(label: string) {
+    const pin = await api<ShadowPin>("POST", "/api/shadow-pins", { label });
+    await this.loadShadowPins();
+    return pin;
+  }
+
+  async revokeShadowPin(pin: string) {
+    await api("DELETE", `/api/shadow-pins/${pin}`);
+    await Promise.all([this.loadShadowPins(), this.refreshContacts()]);
+  }
+
+  async loadMyRadar() {
+    this.set({ myRadar: (await api<{ radar: MyRadar | null }>("GET", "/api/radar/me")).radar });
+  }
+
+  async loadRadar(sector: string | null) {
+    const q = sector ? `?sector=${encodeURIComponent(sector)}` : "";
+    this.set({ radarEntries: (await api<{ entries: RadarEntry[] }>("GET", `/api/radar${q}`)).entries });
+  }
+
+  async joinRadar(sector: string, headline: string) {
+    this.set({ myRadar: (await api<{ radar: MyRadar }>("PUT", "/api/radar", { sector, headline })).radar });
+  }
+
+  async leaveRadar() {
+    await api("DELETE", "/api/radar");
+    this.set({ myRadar: null, radarEntries: null });
+  }
+
+  async loadModQueue() {
+    if (!this.state.me.isModerator) return;
+    this.set({ modQueue: await api<{ open: ModDispute[]; resolved: ModDispute[] }>("GET", "/api/mod/disputes") });
+  }
+
+  async resolveDispute(dealId: string, decision: "refund" | "release", reason: string) {
+    await api("POST", `/api/mod/disputes/${dealId}/resolve`, { decision, reason });
+    await this.loadModQueue();
   }
 
   async loadWallet() {
@@ -499,7 +657,7 @@ export class Messenger {
     return null;
   }
 
-  async send(peer: string, payload: Payload): Promise<boolean> {
+  async send(peer: string, payload: Exclude<Payload, { kind: "moment" }>): Promise<boolean> {
     const blocker = this.sendBlocker(peer);
     if (blocker) {
       this.toast(blocker, "warn");
@@ -582,6 +740,12 @@ export class Messenger {
       case "deals_changed":
         if (this.state.deals[ev.peer] || this.state.activePeer === ev.peer) await this.loadDeals(ev.peer);
         if (this.state.wallet) void this.loadWallet();
+        break;
+      case "moments_changed":
+        if (this.state.moments) await this.loadMoments().catch(() => {});
+        break;
+      case "mod_queue_changed":
+        if (this.state.modQueue) await this.loadModQueue().catch(() => {});
         break;
       case "products_changed":
         if (ev.owner === this.state.me.id) await this.loadMyStore();

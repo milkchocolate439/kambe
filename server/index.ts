@@ -12,6 +12,7 @@ const app = createApp({
   secure: env.PINPATH_SECURE === "1",
   trustProxy: env.PINPATH_TRUST_PROXY === "1",
   allowedOrigins: env.PINPATH_ORIGINS?.split(",").map((s) => s.trim()).filter(Boolean),
+  moderators: env.PINPATH_MODERATORS?.split(",").map((s) => s.trim()).filter(Boolean),
   log: (m) => console.error(m),
 });
 

@@ -22,6 +22,7 @@ export interface PublicUser {
 export interface Me extends PublicUser {
   readReceipts: boolean;
   createdAt: number;
+  isModerator: boolean;
 }
 
 export interface Contact extends PublicUser {
@@ -35,6 +36,68 @@ export interface IncomingRequest {
   from: { id: string; alias: string; pin: string; pm: string };
   note: string;
   createdAt: number;
+  /** Undangan masuk lewat Shadow PIN / PIN radar (bukan PIN utama). */
+  via: { pin: string; kind: "shadow" | "radar"; label: string } | null;
+}
+
+// ------------------------------------------------ Fase 3: penemuan aman ---
+
+export const SHADOW_TTL_MS = 24 * 60 * 60 * 1000;
+export const MAX_ACTIVE_SHADOW = 3;
+export const RADAR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const RADAR_HEADLINE_MAX = 120;
+
+export interface ShadowPin {
+  pin: string;
+  kind: "shadow" | "radar";
+  label: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface RadarEntry {
+  alias: string;
+  pin: string; // PIN radar khusus, BUKAN PIN utama
+  sector: string;
+  headline: string;
+  pro: boolean;
+  since: number;
+}
+
+// ------------------------------------------------- Fase 3: Path Moments ---
+// Setiap momen dienkripsi TERPISAH untuk tiap kontak (+ salinan diri sendiri).
+// Server hanya menyimpan ciphertext; reaksi (😊😮❤️) adalah metadata yang terlihat server.
+
+export const MOMENT_TEXT_MAX = 500;
+export const MOMENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const MAX_MOMENT_COPIES = 500;
+export const REACTIONS = ["smile", "gasp", "love"] as const;
+export type Reaction = (typeof REACTIONS)[number];
+
+export interface MomentCopy {
+  to: string;
+  toKey: string;
+  nonce: string;
+  ciphertext: string;
+}
+
+export interface StoredMoment {
+  id: string;
+  authorId: string;
+  authorAlias: string;
+  authorKey: string;
+  createdAt: number;
+  expiresAt: number;
+  copy: { toKey: string; nonce: string; ciphertext: string };
+  reactions: Record<Reaction, number>;
+  myReaction: Reaction | null;
+}
+
+export interface MyRadar {
+  sector: string;
+  headline: string;
+  pin: string;
+  expiresAt: number;
 }
 
 export interface OutgoingRequest {
@@ -87,6 +150,8 @@ export type ServerEvent =
   | { t: "contacts_changed" }
   | { t: "key_changed"; userId: string }
   | { t: "deals_changed"; peer: string }
+  | { t: "mod_queue_changed" }
+  | { t: "moments_changed" }
   | { t: "products_changed"; owner: string }
   | { t: "session_ended"; reason: string };
 
@@ -155,6 +220,62 @@ export interface Deal {
   autoRefundAt: number | null;
   /** Aksi yang boleh dilakukan pengguna yang meminta data ini. */
   actions: DealAction[];
+  /** Bukti kirim yang wajib diisi penjual saat "kirim" (terlihat pembeli & moderator). */
+  shipment: Shipment | null;
+  disputeReason: DisputeReason | null;
+  /** Pernyataan sengketa — sengaja dikirim ke moderator, TIDAK terenkripsi end-to-end. */
+  statements: DisputeStatement[];
+  resolution: { decision: "refund" | "release"; reason: string; at: number } | null;
+}
+
+// ---------------------------------------------------- Fase 3: sengketa ---
+
+export const COURIERS = [
+  "JNE",
+  "J&T Express",
+  "SiCepat",
+  "Pos Indonesia",
+  "AnterAja",
+  "Ninja Xpress",
+  "Lion Parcel",
+  "GoSend",
+  "GrabExpress",
+  "Diantar langsung",
+  "Jasa digital (tanpa kirim fisik)",
+] as const;
+/** Kurir tanpa nomor resi → wajib keterangan yang cukup jelas. */
+export const NO_TRACKING_COURIERS: readonly string[] = ["Diantar langsung", "Jasa digital (tanpa kirim fisik)"];
+export const TRACKING_RE = /^[A-Za-z0-9-]{6,40}$/;
+export const SHIP_NOTE_MAX = 300;
+export const STATEMENT_MAX = 1000;
+export const STATEMENTS_PER_PARTY = 5;
+export const RESOLUTION_REASON_MIN = 10;
+
+export const DISPUTE_REASONS = {
+  not_received: "Barang/jasa tidak diterima",
+  not_as_described: "Tidak sesuai deskripsi",
+  damaged: "Rusak atau cacat",
+  other: "Lainnya",
+} as const;
+export type DisputeReason = keyof typeof DISPUTE_REASONS;
+
+export interface Shipment {
+  courier: string;
+  tracking: string | null;
+  note: string;
+}
+
+export interface DisputeStatement {
+  role: "buyer" | "seller";
+  text: string;
+  createdAt: number;
+}
+
+/** Tampilan antrean moderator: konteks secukupnya untuk memutus, tanpa isi chat E2EE. */
+export interface ModDispute {
+  deal: Deal;
+  buyer: { id: string; alias: string };
+  seller: { id: string; alias: string };
 }
 
 export interface LedgerEntry {
