@@ -1,7 +1,11 @@
 # PINPath
 
 Messenger berbasis **PIN 6 karakter** ala BBM dengan **enkripsi end-to-end (E2EE) sungguhan**.
-Tanpa nomor HP, tanpa email. Server hanya meneruskan dan menyimpan data acak (ciphertext).
+Tanpa nomor HP, tanpa email. Arsitektur **local-first**: riwayat tinggal di perangkat, server hanya
+**relay** (ciphertext dihapus setelah terkirim) + **notaris** kuitansi bertanda tangan + orkestrasi pembayaran.
+
+> 📐 Struktur resmi & pemetaan terhadap konsep "Local Server User & Monetisasi Terdesentralisasi":
+> **[docs/ARSITEKTUR.md](docs/ARSITEKTUR.md)** — apa yang diadopsi, disesuaikan, dan ditolak (beserta alasannya).
 
 > Dikembangkan dari prototipe `pinpath_messenger_secret_social_commerce.html`. Prototipe itu
 > hanya memberi *label* "E2EE"; versi ini mengimplementasikannya, plus menutup celah XSS,
@@ -24,6 +28,10 @@ Variabel lingkungan (opsional):
 | `PINPATH_SECURE` | – | `1` di balik HTTPS → cookie `Secure` + HSTS |
 | `PINPATH_TRUST_PROXY` | – | `1` hanya bila di belakang reverse proxy milik sendiri |
 | `PINPATH_ORIGINS` | – | Daftar Origin yang diizinkan (koma). Kosong = harus sama dengan Host |
+| `PINPATH_FEE_PER_MILLE` | `25` | Fee platform per seribu (25 = 2,5%, 50 = 5%; maks. 200). Tersimpan per kesepakatan saat dibuat |
+| `PINPATH_NOTARY_KEY` / `PINPATH_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
+| `PINPATH_PAYMENT_PROVIDER` | `simulasi` | `xendit` untuk gateway nyata (butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `PINPATH_PUBLIC_URL`, opsional `XENDIT_SPLIT_RULE_ID`) |
+| `VITE_NOTARY_PUBLIC_KEY` | – | (saat build) kunci publik notaris yang ditanam di aplikasi/APK; tanpa ini klien mem-pin kunci saat pertama terlihat |
 | `PINPATH_MODERATORS` | – | **ID akun** (UUID) moderator sengketa, dipisah koma. Cari ID: `node --import tsx scripts/moderator-id.ts <alias>`. Alias sengaja tidak diterima (bisa diserobot lewat pendaftaran) |
 
 > Catatan Kali/WSL: Node dari paket Kali dikompilasi tanpa dukungan TypeScript, jadi semua
@@ -32,7 +40,7 @@ Variabel lingkungan (opsional):
 ## Pengujian
 
 ```bash
-pnpm test           # 73 tes: kriptografi, API/WebSocket, uang/rekber, sengketa/moderator, Shadow PIN/radar, Moments
+pnpm test           # 88 tes (termasuk relay, notaris kuitansi, gateway tiruan, PIN dinamis): kriptografi, API/WebSocket, uang/rekber, sengketa/moderator, Shadow PIN/radar, Moments
                     # (server sungguhan, DB di memori), termasuk regresi semua temuan red-team
 pnpm build && pnpm test:browser   # 3 suite Chromium headless: chat (21), dagang+moderator (24), Fase 3 (14)
 ```
@@ -65,7 +73,8 @@ dan apakah sebuah pesan adalah PING (untuk rate limit). Catatan undangan tidak t
 - **Belum ada forward secrecy**: kunci percakapan statis per pasangan perangkat. Bila kunci privat
   perangkat dicuri, pesan lama pasangan itu bisa dibuka. → Fase 2: Double Ratchet.
 - **Satu perangkat aktif per akun**. Login di perangkat baru = kunci baru; pesan lama hanya terbaca di perangkat lama.
-- Riwayat ciphertext disimpan di server (agar bisa dimuat ulang). → Fase 2: simpan lokal + hapus di server setelah terkirim.
+- Riwayat hanya ada di perangkat (local-first; server menghapus ciphertext setelah terkirim). Ganti/instal ulang
+  perangkat = riwayat lama tidak ikut — master seed + cadangan terenkripsi direncanakan.
 - Rate limiter di memori (cukup untuk satu instance). Skala banyak instance → Redis.
 - Keamanan E2EE tetap bergantung pada server yang menyajikan kode JS dengan jujur (keterbatasan semua web app E2EE).
   APK/app ter-install mengurangi risiko ini.

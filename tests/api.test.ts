@@ -165,10 +165,54 @@ test("status D/R ala BBM nyata, dan R bisa dimatikan", async () => {
   await sb.next("message");
   sb.send({ t: "read", peer: a.id, ids: [second.id] });
   assert.equal((await sa.next("status")).status, "D");
-  const hist = (await alice.get(`/api/messages/${b.id}`)).body.messages;
-  assert.equal(hist.find((m: { id: string }) => m.id === second.id).status, "D");
+  const statuses = (await alice.get(`/api/messages/${b.id}`)).body.statuses;
+  assert.equal(statuses.find((m: { id: string }) => m.id === second.id).status, "D");
   sa.close();
   sb.close();
+  await app.close();
+});
+
+test("relay store-and-forward: ciphertext dihapus server setelah penerima menyimpan", async () => {
+  const { app, alice, bob, a, b, ka, kb } = await connectedPair();
+  const sa = await alice.socket();
+  const msg = await sealed(a, ka, b, kb.publicKey, "simpan lalu hapus");
+  sa.send(msg);
+  await sa.next("ack");
+  // Bob offline: pesan menunggu di relay (masih berciphertext). Mengambilnya TIDAK menghapusnya —
+  // penghapusan baru terjadi setelah bob mengonfirmasi sudah menyimpan (anti hilang saat app tertutup).
+  const first = (await bob.get(`/api/messages/${a.id}`)).body;
+  assert.equal(first.pending.length, 1);
+  assert.equal(first.pending[0].ciphertext, msg.ciphertext);
+  assert.equal((await bob.get(`/api/messages/${a.id}`)).body.pending.length, 1, "ambil ulang aman sebelum ack");
+
+  const sb = await bob.socket();
+  sb.send({ t: "delivered", ids: [msg.id] });
+  assert.equal((await sa.next("status")).status, "D");
+  const row = app.db.prepare("SELECT nonce, ciphertext, delivered_at FROM messages WHERE id = ?").get(msg.id) as Record<string, unknown>;
+  assert.equal(row.ciphertext, "", "ciphertext sudah dihapus dari server");
+  assert.equal(row.nonce, "");
+  assert.ok(row.delivered_at, "metadata status tetap ada untuk D/R");
+  assert.equal((await bob.get(`/api/messages/${a.id}`)).body.pending.length, 0);
+  assert.equal((await alice.get(`/api/messages/${b.id}`)).body.statuses[0].status, "D", "pengirim tetap bisa sinkron status");
+
+  // R tetap bekerja walau ciphertext sudah tiada.
+  sb.send({ t: "read", peer: a.id, ids: [msg.id] });
+  assert.equal((await sa.next("status")).status, "R");
+  sa.close();
+  sb.close();
+  await app.close();
+});
+
+test("relay: pesan & metadata lebih tua dari 30 hari dibersihkan (bukan arsip)", async () => {
+  const { app, alice, a, b, ka, kb } = await connectedPair();
+  const sa = await alice.socket();
+  const old = await sealed(a, ka, b, kb.publicKey, "lama");
+  sa.send(old);
+  await sa.next("ack");
+  app.db.prepare("UPDATE messages SET created_at = ? WHERE id = ?").run(Date.now() - 31 * 86_400_000, old.id);
+  app.db.prepare("DELETE FROM messages WHERE created_at <= ?").run(Date.now() - 30 * 86_400_000); // sama dengan janitor
+  assert.equal((app.db.prepare("SELECT COUNT(*) AS n FROM messages").get() as { n: number }).n, 0);
+  sa.close();
   await app.close();
 });
 

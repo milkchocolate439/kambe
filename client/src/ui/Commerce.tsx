@@ -97,7 +97,7 @@ const ACTIONS: Record<DealAction, { label: string; primary?: boolean; danger?: b
   confirm: {
     label: "Barang diterima · cairkan",
     primary: true,
-    confirm: (d) => `${rupiah(d.sellerNet)} diteruskan ke penjual (setelah fee 2,5%). Hanya konfirmasi kalau barang/jasa benar-benar sudah kamu terima. Tidak bisa dibatalkan.`,
+    confirm: (d) => `${rupiah(d.sellerNet)} diteruskan ke penjual (setelah fee platform). Hanya konfirmasi kalau barang/jasa benar-benar sudah kamu terima. Tidak bisa dibatalkan.`,
   },
   cancel: { label: "Batalkan" },
   refund: {
@@ -147,7 +147,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         <span>{peerAlias}</span>
         <span className="muted">Harga</span>
         <span className="mono">{rupiah(deal.price)}</span>
-        <span className="muted">Fee platform 2,5%</span>
+        <span className="muted">Fee platform ({((deal.fee / deal.price) * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 })}%)</span>
         <span className="mono">−{rupiah(deal.fee)}</span>
         <span className="muted">Diterima penjual</span>
         <span className="mono">{rupiah(deal.sellerNet)}</span>
@@ -167,6 +167,12 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
               : "Batas kirim sudah lewat — pembeli boleh menarik dananya kapan saja."}
           {deal.autoRefundAt && ` Dana kembali otomatis ke pembeli ${when(deal.autoRefundAt)} bila belum dikirim.`}
         </div>
+      )}
+      <ReceiptLine deal={deal} />
+      {deal.paymentUrl?.startsWith("https://") && iAmBuyer && (
+        <a className="btn primary small" href={deal.paymentUrl} target="_blank" rel="noopener noreferrer">
+          Lanjutkan ke halaman bayar resmi
+        </a>
       )}
       <ShipmentInfo deal={deal} />
       <ResolutionNote deal={deal} />
@@ -226,6 +232,32 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
   );
 }
 
+/** Status kuitansi notaris: bukti bertanda tangan yang diverifikasi di perangkat ini. */
+function ReceiptLine({ deal }: { deal: Deal }) {
+  const [s] = useMessenger();
+  const r = s.receipts[deal.id];
+  if (!r) return <span className="tiny muted">Memeriksa kuitansi…</span>;
+  if (r.state === "ok") {
+    return (
+      <span className="tiny" style={{ color: "var(--ok)" }} title={`Kode bayar ${deal.payRef}`}>
+        <Icon name="shieldCheck" size={12} /> Kuitansi #{r.seq} sah (ditandatangani notaris) · {deal.payRef}
+      </span>
+    );
+  }
+  const text = {
+    invalid: "Kuitansi TIDAK SAH — tanda tangan notaris tidak cocok.",
+    mismatch: "Isi kuitansi tidak cocok dengan data kesepakatan.",
+    rollback: "Server mengembalikan riwayat lama (kuitansi mundur).",
+    missing: "Kuitansi belum bisa diverifikasi.",
+  }[r.state];
+  return (
+    <span className="tiny" style={{ color: r.state === "missing" ? "var(--muted)" : "var(--danger)", fontWeight: 700 }}>
+      <Icon name="alert" size={12} /> {text}
+      {r.state !== "missing" && " Jangan lanjutkan pembayaran."}
+    </span>
+  );
+}
+
 // --------------------------------------------------- etalase lawan chat ---
 
 export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerAlias: string; onClose: () => void }) {
@@ -265,8 +297,8 @@ export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerA
           <div className="deal-grid small">
             <span className="muted">Harga (dikunci server)</span>
             <span className="mono">{rupiah(chosen.price)}</span>
-            <span className="muted">Fee 2,5% ditanggung penjual</span>
-            <span className="mono">{rupiah(platformFee(chosen.price))}</span>
+            <span className="muted">Fee platform ditanggung penjual</span>
+            <span className="mono">{rupiah(platformFee(chosen.price, s.config?.feePerMille))}</span>
           </div>
           <div className="banner info" style={{ borderRadius: 12, border: 0 }}>
             <Icon name="shieldCheck" />
@@ -305,7 +337,8 @@ export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerA
 // ------------------------------------------------ tawaran kustom (PRO) ---
 
 export function OfferModal({ peer, peerAlias, onClose }: { peer: string; peerAlias: string; onClose: () => void }) {
-  const [, m] = useMessenger();
+  const [s, m] = useMessenger();
+  const perMille = s.config?.feePerMille;
   const [title, setTitle] = useState("");
   const [price, setPrice] = useState(0);
   const [idem] = useState(newKey);
@@ -327,7 +360,14 @@ export function OfferModal({ peer, peerAlias, onClose }: { peer: string; peerAli
         <div className="field">
           <label htmlFor="offer-price">Harga</label>
           <RupiahInput id="offer-price" value={price} onChange={setPrice} />
-          {price > 0 && (problem ? <span className="error">{problem}</span> : <span className="hint">Kamu menerima {rupiah(price - platformFee(price))} setelah fee 2,5% ({rupiah(platformFee(price))}).</span>)}
+          {price > 0 &&
+            (problem ? (
+              <span className="error">{problem}</span>
+            ) : (
+              <span className="hint">
+                Kamu menerima {rupiah(price - platformFee(price, perMille))} setelah fee platform ({rupiah(platformFee(price, perMille))}).
+              </span>
+            ))}
         </div>
         {error && <span className="error" role="alert">{error}</span>}
         <div className="row">
@@ -485,7 +525,7 @@ function ProTab() {
         <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18, color: "var(--text-2)" }}>
           <li>Buka etalase produk/jasa untuk kontakmu</li>
           <li>Tawarkan kesepakatan rekber langsung dari chat</li>
-          <li>Fee 2,5% hanya dipotong saat dana cair (tidak saat refund)</li>
+          <li>Fee {((s.config?.feePerMille ?? 25) / 10).toLocaleString("id-ID")}% hanya dipotong saat dana cair (tidak saat refund)</li>
         </ul>
       </div>
       {pro?.active ? (

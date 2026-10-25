@@ -25,6 +25,9 @@ export interface UserRow {
   read_receipts: number;
   pro_until: number;
   created_at: number;
+  pin_rotate_days: number;
+  pin_rotated_at: number;
+  gateway_account: string | null;
 }
 
 export interface Ctx {

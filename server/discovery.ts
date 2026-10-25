@@ -8,6 +8,7 @@ import type { IncomingMessage } from "node:http";
 import { tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Handler, type Row } from "./http.ts";
 import {
+  MAX_ACTIVE_ONCE,
   MAX_ACTIVE_SHADOW,
   RADAR_HEADLINE_MAX,
   RADAR_TTL_MS,
@@ -36,7 +37,7 @@ export function registerDiscovery(d: DiscoveryDeps) {
 
   const toShadow = (r: Row): ShadowPin => ({
     pin: r.pin as string,
-    kind: r.kind as "shadow" | "radar",
+    kind: r.kind as ShadowPin["kind"],
     label: r.label as string,
     createdAt: r.created_at as number,
     expiresAt: r.expires_at as number,
@@ -48,22 +49,28 @@ export function registerDiscovery(d: DiscoveryDeps) {
     pins: (db.prepare("SELECT * FROM shadow_pins WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC").all(user.id, Date.now()) as Row[]).map(toShadow),
   })));
 
+  // once=true → PIN SEKALI PAKAI: hangus otomatis begitu dipakai untuk satu undangan (PIN dinamis).
   route("POST", "/api/shadow-pins", authed(async ({ req, user }) => {
-    const label = d.cleanText(d.str(await d.readJson(req), "label", { max: 80, optional: true })).slice(0, 40);
-    d.limit(`shadow-create:${user.id}`, 10, 24 * HOUR, "Terlalu banyak Shadow PIN dibuat hari ini.");
+    const body = await d.readJson(req);
+    const label = d.cleanText(d.str(body, "label", { max: 80, optional: true })).slice(0, 40);
+    const kind = body.once === true ? "once" : "shadow";
+    d.limit(`shadow-create:${user.id}`, 20, 24 * HOUR, "Terlalu banyak PIN sementara dibuat hari ini.");
     const now = Date.now();
+    const max = kind === "once" ? MAX_ACTIVE_ONCE : MAX_ACTIVE_SHADOW;
     const pin = tx(db, () => {
-      const active = db.prepare("SELECT COUNT(*) AS n FROM shadow_pins WHERE user_id = ? AND kind = 'shadow' AND expires_at > ?").get(user.id, now) as { n: number };
-      if (active.n >= MAX_ACTIVE_SHADOW) throw new HttpError(409, "too_many_shadow", `Maksimal ${MAX_ACTIVE_SHADOW} Shadow PIN aktif. Cabut salah satu dulu.`);
+      const active = db.prepare("SELECT COUNT(*) AS n FROM shadow_pins WHERE user_id = ? AND kind = ? AND expires_at > ?").get(user.id, kind, now) as { n: number };
+      if (active.n >= max) {
+        throw new HttpError(409, "too_many_shadow", `Maksimal ${max} ${kind === "once" ? "PIN sekali pakai" : "Shadow PIN"} aktif. Cabut salah satu dulu.`);
+      }
       const p = d.uniquePin();
-      db.prepare("INSERT INTO shadow_pins (pin, user_id, kind, label, created_at, expires_at) VALUES (?, ?, 'shadow', ?, ?, ?)").run(p, user.id, label, now, now + SHADOW_TTL_MS);
+      db.prepare("INSERT INTO shadow_pins (pin, user_id, kind, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)").run(p, user.id, kind, label, now, now + SHADOW_TTL_MS);
       return p;
     });
     return toShadow(db.prepare("SELECT * FROM shadow_pins WHERE pin = ?").get(pin) as Row);
   }));
 
   route("DELETE", "/api/shadow-pins/:pin", authed(({ user, params }) => {
-    const { changes } = db.prepare("DELETE FROM shadow_pins WHERE pin = ? AND user_id = ? AND kind = 'shadow'").run(params.pin, user.id);
+    const { changes } = db.prepare("DELETE FROM shadow_pins WHERE pin = ? AND user_id = ? AND kind IN ('shadow', 'once')").run(params.pin, user.id);
     if (Number(changes) === 0) throw new HttpError(404, "not_found", "Shadow PIN tidak ditemukan");
     // Undangan yang belum diterima lewat PIN ini ikut hangus — itulah gunanya mencabut.
     db.prepare("DELETE FROM contact_requests WHERE to_id = ? AND via_pin = ?").run(user.id, params.pin);

@@ -1,6 +1,8 @@
 // Kontrak data antara klien dan server. Server hanya pernah melihat
 // metadata di bawah ini — isi pesan selalu berupa ciphertext.
 
+import type { SignedReceipt } from "./receipt.ts";
+
 export const ALIAS_RE = /^[A-Za-z0-9_]{3,24}$/;
 export const PASSPHRASE_MIN = 10;
 export const PASSPHRASE_MAX = 256;
@@ -23,7 +25,13 @@ export interface Me extends PublicUser {
   readReceipts: boolean;
   createdAt: number;
   isModerator: boolean;
+  /** Rotasi PIN utama otomatis (hari); 0 = mati. */
+  pinRotateDays: PinRotateDays;
+  pinRotatedAt: number;
 }
+
+export const PIN_ROTATE_OPTIONS = [0, 1, 7, 30] as const;
+export type PinRotateDays = (typeof PIN_ROTATE_OPTIONS)[number];
 
 export interface Contact extends PublicUser {
   since: number;
@@ -36,9 +44,12 @@ export interface IncomingRequest {
   from: { id: string; alias: string; pin: string; pm: string };
   note: string;
   createdAt: number;
-  /** Undangan masuk lewat Shadow PIN / PIN radar (bukan PIN utama). */
-  via: { pin: string; kind: "shadow" | "radar"; label: string } | null;
+  /** Undangan masuk lewat Shadow PIN / PIN sekali pakai / PIN radar (bukan PIN utama). */
+  via: { pin: string; kind: ShadowKind; label: string } | null;
 }
+
+export type ShadowKind = "shadow" | "once" | "radar";
+export const MAX_ACTIVE_ONCE = 5;
 
 // ------------------------------------------------ Fase 3: penemuan aman ---
 
@@ -49,7 +60,7 @@ export const RADAR_HEADLINE_MAX = 120;
 
 export interface ShadowPin {
   pin: string;
-  kind: "shadow" | "radar";
+  kind: ShadowKind;
   label: string;
   createdAt: number;
   expiresAt: number;
@@ -152,6 +163,7 @@ export type ServerEvent =
   | { t: "deals_changed"; peer: string }
   | { t: "mod_queue_changed" }
   | { t: "moments_changed" }
+  | { t: "me_changed" }
   | { t: "products_changed"; owner: string }
   | { t: "session_ended"; reason: string };
 
@@ -168,9 +180,16 @@ export const PRODUCT_DESC_MAX = 500;
 export const MAX_PRODUCTS = 50;
 export const SECTORS = ["Komoditas & Pangan", "Jasa Digital & IT", "Desain & Kreatif", "Logistik & B2B", "Lainnya"] as const;
 
-/** Fee platform 2,5% dibulatkan ke rupiah terdekat (setengah ke atas) — aritmetika bilangan bulat. */
-export function platformFee(price: number): number {
-  return Math.floor((price * FEE_PER_MILLE + 500) / 1000);
+/** Fee platform (default 2,5%) dibulatkan ke rupiah terdekat (setengah ke atas) — aritmetika bilangan bulat. */
+export function platformFee(price: number, perMille: number = FEE_PER_MILLE): number {
+  return Math.floor((price * perMille + 500) / 1000);
+}
+
+/** Konfigurasi publik server — dibaca klien agar pratinjau fee & verifikasi kuitansi sama dengan server. */
+export interface PublicConfig {
+  feePerMille: number;
+  notaryPublicKey: string;
+  paymentProvider: "simulasi" | "xendit";
 }
 
 export interface ProStatus {
@@ -226,6 +245,12 @@ export interface Deal {
   /** Pernyataan sengketa — sengaja dikirim ke moderator, TIDAK terenkripsi end-to-end. */
   statements: DisputeStatement[];
   resolution: { decision: "refund" | "release"; reason: string; at: number } | null;
+  /** Kode referensi bayar sekali pakai (tanpa identitas) — dipakai di gateway & kuitansi. */
+  payRef: string;
+  /** Kuitansi notaris terbaru (Ed25519). Klien memverifikasi sebelum mempercayai status. */
+  receipt: SignedReceipt | null;
+  /** Halaman bayar gateway (mode gateway); null pada mode simulasi. */
+  paymentUrl: string | null;
 }
 
 // ---------------------------------------------------- Fase 3: sengketa ---

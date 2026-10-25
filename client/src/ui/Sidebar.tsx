@@ -210,7 +210,7 @@ function Requests() {
                 </div>
                 {r.via && (
                   <div className="tiny" style={{ color: "var(--amber)" }}>
-                    <Icon name={r.via.kind === "radar" ? "store" : "clock"} size={12} /> Lewat {r.via.kind === "radar" ? "radar" : "Shadow PIN"} {r.via.pin}
+                    <Icon name={r.via.kind === "radar" ? "store" : "clock"} size={12} /> Lewat {r.via.kind === "radar" ? "radar" : r.via.kind === "once" ? "PIN sekali pakai" : "Shadow PIN"} {r.via.pin}
                     {r.via.label && r.via.kind === "shadow" ? ` (${r.via.label})` : ""} — dia tidak melihat PIN utamamu
                   </div>
                 )}

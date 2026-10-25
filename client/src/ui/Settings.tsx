@@ -53,6 +53,25 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
           <Switch checked={s.me.readReceipts} label="Kirim tanda dibaca" onChange={(v) => void run(() => m.updateSettings({ readReceipts: v }))} />
         </div>
 
+        <div className="row">
+          <div className="grow">
+            <label htmlFor="pin-rotate" style={{ fontWeight: 600 }}>Ganti PIN utama otomatis</label>
+            <div className="hint">PIN lama berhenti berlaku; kontak yang sudah terhubung tidak terputus.</div>
+          </div>
+          <select
+            id="pin-rotate"
+            className="input"
+            style={{ width: "auto" }}
+            value={s.me.pinRotateDays}
+            onChange={(e) => void run(() => m.updateSettings({ pinRotateDays: Number(e.target.value) }), "Pengaturan rotasi PIN disimpan")}
+          >
+            <option value={0}>Mati</option>
+            <option value={1}>Setiap hari</option>
+            <option value={7}>Setiap minggu</option>
+            <option value={30}>Setiap bulan</option>
+          </select>
+        </div>
+
         <div className="divider" />
 
         <div>

@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS ledger (
 CREATE INDEX IF NOT EXISTS ledger_account ON ledger(account);
 CREATE INDEX IF NOT EXISTS ledger_ref ON ledger(ref);
 
+-- Kuitansi notaris berantai per kesepakatan (lihat shared/receipt.ts). Append-only.
+CREATE TABLE IF NOT EXISTS deal_receipts (
+  deal_id     TEXT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  seq         INTEGER NOT NULL,
+  body        TEXT NOT NULL,
+  sig         TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (deal_id, seq)
+);
+
 -- Fase 3: pernyataan sengketa (dikirim sadar ke moderator) & log audit keputusan moderator.
 CREATE TABLE IF NOT EXISTS deal_statements (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -220,11 +230,23 @@ function migrate(db: DatabaseSync) {
   addDealCol("resolution", "TEXT");
   addDealCol("resolution_reason", "TEXT");
   addDealCol("resolved_by", "TEXT");
+  addDealCol("pay_ref", "TEXT");
+  addDealCol("payment_url", "TEXT");
+  addDealCol("provider_ref", "TEXT");
+  // Sub-akun penjual di payment gateway (xenPlatform) — diisi setelah onboarding/KYC penjual.
+  const userCols = (db.prepare("PRAGMA table_info(users)").all() as { name: string }[]).map((c) => c.name);
+  if (!userCols.includes("gateway_account")) db.exec("ALTER TABLE users ADD COLUMN gateway_account TEXT");
+  // PIN dinamis: rotasi PIN utama otomatis (0 = mati).
+  if (!userCols.includes("pin_rotate_days")) db.exec("ALTER TABLE users ADD COLUMN pin_rotate_days INTEGER NOT NULL DEFAULT 0");
+  if (!userCols.includes("pin_rotated_at")) db.exec("ALTER TABLE users ADD COLUMN pin_rotated_at INTEGER NOT NULL DEFAULT 0");
   // PIN yang dipakai saat terhubung (shadow/radar) — itulah yang ditampilkan ke pihak pengundang.
   for (const table of ["contacts", "contact_requests"]) {
     const c = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((x) => x.name);
     if (!c.includes("via_pin")) db.exec(`ALTER TABLE ${table} ADD COLUMN via_pin TEXT`);
   }
+  // Jenis PIN yang dipakai saat mengundang (shadow/once/radar) — tetap terbaca walau PIN-nya sudah hangus.
+  const reqCols = (db.prepare("PRAGMA table_info(contact_requests)").all() as { name: string }[]).map((x) => x.name);
+  if (!reqCols.includes("via_kind")) db.exec("ALTER TABLE contact_requests ADD COLUMN via_kind TEXT");
 }
 
 export type DB = DatabaseSync;

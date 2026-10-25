@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client, startApp } from "./helpers.ts";
+import { PIN_ALPHABET } from "../shared/pin.ts";
 
 async function pair() {
   const env = await startApp();
@@ -64,6 +65,75 @@ test("regresi audit Fase 3 #3: kontak via Shadow PIN tidak bisa memastikan tebak
   assert.equal(right.status, wrong.status, "tebakan benar & salah harus tak bisa dibedakan");
   assert.equal(right.body.message, wrong.body.message);
   assert.equal((await stranger.post("/api/contacts/invite", { pin: shadow.pin })).body.error, "already_contacts", "PIN yang memang ia pakai tetap dijawab jujur");
+  await app.close();
+});
+
+test("PIN dinamis: PIN sekali pakai hangus setelah satu undangan", async () => {
+  const { app, base, owner, stranger, o } = await pair();
+  const once = (await owner.post("/api/shadow-pins", { once: true, label: "Pembeli COD" })).body;
+  assert.equal(once.kind, "once");
+  assert.equal((await stranger.post("/api/contacts/invite", { pin: once.pin })).body.status, "pending");
+  const inc = (await owner.get("/api/contacts")).body.incoming[0];
+  assert.equal(inc.via.kind, "once", "jenis PIN tetap tercatat walau PIN-nya sudah hangus");
+  const second = new Client(base);
+  await second.signup("Penumpang_Gelap");
+  assert.equal((await second.post("/api/contacts/invite", { pin: once.pin })).status, 404, "PIN sekali pakai tidak bisa dipakai orang kedua");
+  assert.equal((await owner.get("/api/shadow-pins")).body.pins.filter((p: { kind: string }) => p.kind === "once").length, 0);
+  await owner.post(`/api/contacts/requests/${inc.id}/accept`);
+  const seen = (await stranger.get("/api/contacts")).body;
+  assert.equal(seen.contacts[0].pin, once.pin);
+  assert.ok(!JSON.stringify(seen).includes(o.pin), "PIN utama tidak terlihat");
+  for (let i = 0; i < 5; i++) await owner.post("/api/shadow-pins", { once: true });
+  assert.equal((await owner.post("/api/shadow-pins", { once: true })).status, 409, "maks 5 PIN sekali pakai aktif");
+  await app.close();
+});
+
+test("PIN dinamis: PIN yang pernah dipakai terhubung tidak didaur ulang ke orang lain", async () => {
+  const { app, owner, stranger } = await pair();
+  const once = (await owner.post("/api/shadow-pins", { once: true })).body;
+  await stranger.post("/api/contacts/invite", { pin: once.pin });
+  assert.equal(app.db.prepare("SELECT 1 FROM shadow_pins WHERE pin = ?").get(once.pin), undefined, "PIN sudah hangus");
+
+  // Paksa generator acak mengeluarkan PIN yang sudah hangus itu lebih dulu: server WAJIB menolaknya
+  // (masih dirujuk undangan) dan memilih PIN lain.
+  const forced = [...once.pin].map((c) => PIN_ALPHABET.indexOf(c));
+  const original = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+  let served = false;
+  globalThis.crypto.getRandomValues = (<T extends ArrayBufferView | null>(arr: T): T => {
+    if (!served && arr instanceof Uint8Array && arr.length === forced.length) {
+      served = true;
+      arr.set(forced);
+      return arr;
+    }
+    return original(arr as never) as T;
+  }) as typeof globalThis.crypto.getRandomValues;
+  try {
+    const fresh = (await owner.post("/api/shadow-pins", {})).body.pin;
+    assert.equal(served, true, "generator benar-benar mencoba PIN lama dulu");
+    assert.notEqual(fresh, once.pin, "PIN yang pernah dipakai terhubung tidak diberikan lagi");
+  } finally {
+    globalThis.crypto.getRandomValues = original;
+  }
+  await app.close();
+});
+
+test("PIN dinamis: rotasi PIN utama otomatis tanpa memutus kontak", async () => {
+  const { app, owner, stranger, o } = await pair();
+  await stranger.post("/api/contacts/invite", { pin: o.pin });
+  await owner.post(`/api/contacts/requests/${(await owner.get("/api/contacts")).body.incoming[0].id}/accept`);
+  assert.equal((await owner.patch("/api/me/settings", { pinRotateDays: 3 })).status, 400);
+  const me = (await owner.patch("/api/me/settings", { pinRotateDays: 7 })).body.me;
+  assert.equal(me.pinRotateDays, 7);
+  assert.equal(app.runPinRotation(me.pinRotatedAt + 6 * 86_400_000), 0, "belum waktunya");
+  assert.equal(app.runPinRotation(me.pinRotatedAt + 7 * 86_400_000 + 1), 1);
+  const after = (await owner.get("/api/me")).body.me;
+  assert.notEqual(after.pin, o.pin);
+  assert.equal((await stranger.get("/api/contacts")).body.contacts.length, 1, "kontak tetap terhubung");
+  const late = new Client(owner.base);
+  await late.signup("Penyimpan_PIN_Lama");
+  assert.equal((await late.post("/api/contacts/invite", { pin: o.pin })).status, 404, "PIN lama sudah tidak berlaku");
+  await owner.patch("/api/me/settings", { pinRotateDays: 0 });
+  assert.equal(app.runPinRotation(Date.now() + 365 * 86_400_000), 0, "rotasi mati = PIN tetap");
   await app.close();
 });
 

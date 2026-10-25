@@ -29,12 +29,19 @@ import {
   type OutgoingRequest,
   type Product,
   type ProStatus,
+  type PublicConfig,
   type ServerEvent,
   type StoredMessage,
   type Wallet,
 } from "../../../shared/protocol.ts";
 import { api, ApiError } from "./api.ts";
-import { keystore, type PinnedKey } from "./keystore.ts";
+import { keystore, type LocalMessage, type PinnedKey } from "./keystore.ts";
+import { parseReceipt, verifyReceipt } from "../../../shared/receipt.ts";
+
+/** Hasil verifikasi kuitansi notaris untuk satu kesepakatan. */
+export type ReceiptCheck =
+  | { state: "ok"; seq: number }
+  | { state: "invalid" | "mismatch" | "rollback" | "missing"; seq: number | null };
 import { Realtime, type ConnState } from "./realtime.ts";
 
 export type MsgStatus = "pending" | "S" | "D" | "R" | "failed";
@@ -107,6 +114,10 @@ export interface State {
   myRadar: MyRadar | null | undefined; // undefined = belum dimuat
   radarEntries: RadarEntry[] | null;
   moments: MomentView[] | null;
+  // Notaris kuitansi
+  config: PublicConfig | null;
+  notaryAlert: string | null;
+  receipts: Record<string, ReceiptCheck>;
 }
 
 const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3 };
@@ -149,6 +160,9 @@ export class Messenger {
       myRadar: undefined,
       radarEntries: null,
       moments: null,
+      config: null,
+      notaryAlert: null,
+      receipts: {},
     };
     this.rt = new Realtime(
       (ev) => void this.onEvent(ev),
@@ -190,7 +204,7 @@ export class Messenger {
   async start() {
     await this.setupDevice();
     this.rt.start();
-    await Promise.all([this.refreshContacts(), this.loadMyStore()]);
+    await Promise.all([this.refreshContacts(), this.loadMyStore(), this.loadConfig()]);
     document.addEventListener("visibilitychange", this.onVisible);
   }
 
@@ -334,7 +348,7 @@ export class Messenger {
 
   // ---------------------------------------------------------- profil ---
 
-  async updateSettings(patch: { pm?: string; readReceipts?: boolean }) {
+  async updateSettings(patch: { pm?: string; readReceipts?: boolean; pinRotateDays?: number }) {
     const { me } = await api<{ me: Me }>("PATCH", "/api/me/settings", patch);
     this.set({ me });
   }
@@ -380,7 +394,20 @@ export class Messenger {
     }
   }
 
-  private upsert(peer: string, msg: ChatMessage) {
+  // ---------------------------------------------- mesin lokal (riwayat) ---
+
+  private toLocal(peer: string, m: ChatMessage): LocalMessage {
+    return { key: `${this.state.me.id}:${m.id}`, owner: this.state.me.id, peer, ...m };
+  }
+
+  /** Simpan pesan (dari state terbaru) ke IndexedDB. Riwayat hanya ada di perangkat — server cuma relay. */
+  private persist(peer: string, ids: string[]) {
+    const set = new Set(ids);
+    const msgs = (this.state.threads[peer]?.messages ?? []).filter((m) => set.has(m.id));
+    keystore.putMessages(msgs.map((m) => this.toLocal(peer, m))).catch(() => this.toast("Gagal menyimpan riwayat di perangkat ini", "warn"));
+  }
+
+  private upsert(peer: string, msg: ChatMessage, save = true) {
     this.setThread(peer, (t) => {
       const i = t.messages.findIndex((m) => m.id === msg.id);
       if (i < 0) return { ...t, messages: [...t.messages, msg].sort((a, b) => a.createdAt - b.createdAt) };
@@ -391,23 +418,22 @@ export class Messenger {
       messages[i] = { ...prev, ...msg, status };
       return { ...t, messages };
     });
+    if (save) this.persist(peer, [msg.id]);
   }
 
   private patchStatus(ids: string[], status: MsgStatus, error?: string) {
     const set = new Set(ids);
     const threads = { ...this.state.threads };
-    let changed = false;
+    const touched: [string, string[]][] = [];
     for (const [peer, t] of Object.entries(threads)) {
-      if (!t.messages.some((m) => set.has(m.id))) continue;
-      threads[peer] = {
-        ...t,
-        messages: t.messages.map((m) =>
-          set.has(m.id) && (status === "failed" || RANK[status] > RANK[m.status]) ? { ...m, status, error } : m,
-        ),
-      };
-      changed = true;
+      const hit = t.messages.filter((m) => set.has(m.id) && (status === "failed" || RANK[status] > RANK[m.status])).map((m) => m.id);
+      if (!hit.length) continue;
+      threads[peer] = { ...t, messages: t.messages.map((m) => (hit.includes(m.id) ? { ...m, status, error } : m)) };
+      touched.push([peer, hit]);
     }
-    if (changed) this.set({ threads });
+    if (!touched.length) return;
+    this.set({ threads });
+    for (const [peer, hit] of touched) this.persist(peer, hit);
   }
 
   async openThread(peer: string | null) {
@@ -448,6 +474,68 @@ export class Messenger {
     await this.loadMyStore();
   }
 
+  // ------------------------------------------------- notaris & kuitansi ---
+
+  private notaryKey: string | null = null;
+
+  /**
+   * Kunci publik notaris: kunci yang DITANAM saat build (VITE_NOTARY_PUBLIC_KEY — untuk APK produksi),
+   * atau di-pin saat pertama kali terlihat (TOFU). Bila server tiba-tiba memakai kunci lain → peringatan.
+   */
+  async loadConfig() {
+    try {
+      const config = await api<PublicConfig>("GET", "/api/config");
+      const embedded = (import.meta.env.VITE_NOTARY_PUBLIC_KEY as string | undefined) || null;
+      const pinned = embedded ?? (await keystore.getMeta<string>("notaryKey")) ?? null;
+      if (!pinned) await keystore.putMeta("notaryKey", config.notaryPublicKey);
+      this.notaryKey = pinned ?? config.notaryPublicKey;
+      const notaryAlert =
+        this.notaryKey !== config.notaryPublicKey
+          ? "Kunci notaris server berbeda dari yang dipercaya perangkat ini. Kuitansi baru tidak akan dianggap sah — jangan lakukan pembayaran sampai jelas."
+          : null;
+      this.set({ config, notaryAlert });
+    } catch {
+      /* tanpa config, kuitansi berstatus "belum terverifikasi" */
+    }
+  }
+
+  /** Verifikasi kuitansi tiap kesepakatan: tanda tangan, kecocokan isi, dan anti-rollback (seq tidak boleh mundur). */
+  private async checkReceipts(deals: Deal[]) {
+    const out: Record<string, ReceiptCheck> = {};
+    for (const deal of deals) {
+      if (!deal.receipt || !this.notaryKey) {
+        out[deal.id] = { state: "missing", seq: null };
+        continue;
+      }
+      let body;
+      try {
+        body = parseReceipt(deal.receipt);
+      } catch {
+        out[deal.id] = { state: "invalid", seq: null };
+        continue;
+      }
+      if (!(await verifyReceipt(this.notaryKey, deal.receipt))) {
+        out[deal.id] = { state: "invalid", seq: body.seq };
+        continue;
+      }
+      const matches =
+        body.dealId === deal.id && body.status === deal.status && body.price === deal.price && body.fee === deal.fee &&
+        body.buyerId === deal.buyerId && body.sellerId === deal.sellerId && body.payRef === deal.payRef;
+      if (!matches) {
+        out[deal.id] = { state: "mismatch", seq: body.seq };
+        continue;
+      }
+      const seen = (await keystore.getMeta<number>(`receipt:${deal.id}`)) ?? -1;
+      if (body.seq < seen) {
+        out[deal.id] = { state: "rollback", seq: body.seq };
+        continue;
+      }
+      if (body.seq > seen) await keystore.putMeta(`receipt:${deal.id}`, body.seq);
+      out[deal.id] = { state: "ok", seq: body.seq };
+    }
+    this.set({ receipts: { ...this.state.receipts, ...out } });
+  }
+
   async loadCatalog(peer: string) {
     const r = await api<{ pro: boolean; products: Product[] }>("GET", `/api/users/${peer}/products`);
     this.set({ catalogs: { ...this.state.catalogs, [peer]: r } });
@@ -457,6 +545,7 @@ export class Messenger {
     try {
       const { deals } = await api<{ deals: Deal[] }>("GET", `/api/deals?peer=${encodeURIComponent(peer)}`);
       this.set({ deals: { ...this.state.deals, [peer]: deals } });
+      void this.checkReceipts(deals);
     } catch {
       /* diabaikan; dicoba lagi saat event berikutnya */
     }
@@ -466,6 +555,7 @@ export class Messenger {
     const list = this.state.deals[peer] ?? [];
     const next = list.some((d) => d.id === deal.id) ? list.map((d) => (d.id === deal.id ? deal : d)) : [...list, deal];
     this.set({ deals: { ...this.state.deals, [peer]: next } });
+    void this.checkReceipts([deal]);
   }
 
   async createDeal(peer: string, productId: string, idempotencyKey: string) {
@@ -569,8 +659,8 @@ export class Messenger {
     this.set({ shadowPins: (await api<{ pins: ShadowPin[] }>("GET", "/api/shadow-pins")).pins });
   }
 
-  async createShadowPin(label: string) {
-    const pin = await api<ShadowPin>("POST", "/api/shadow-pins", { label });
+  async createShadowPin(label: string, once = false) {
+    const pin = await api<ShadowPin>("POST", "/api/shadow-pins", { label, once });
     await this.loadShadowPins();
     return pin;
   }
@@ -621,15 +711,31 @@ export class Messenger {
     return this.send(peer, { kind: "identity", text });
   }
 
+  /**
+   * Local-first: tampilkan riwayat dari perangkat dulu, lalu ambil pesan yang masih menunggu di relay,
+   * simpan lokal, BARU konfirmasi "delivered" (saat itulah server menghapus ciphertext-nya).
+   */
   async loadThread(peer: string) {
+    const me = this.state.me.id;
     this.setThread(peer, (t) => ({ ...t, loading: true }));
+    const local = await keystore.getThread(me, peer).catch(() => [] as LocalMessage[]);
+    this.setThread(peer, (t) => {
+      const byId = new Map<string, ChatMessage>();
+      for (const l of local) {
+        const { key: _k, owner: _o, peer: _p, ...m } = l;
+        byId.set(m.id, m);
+      }
+      for (const m of t.messages) byId.set(m.id, { ...byId.get(m.id), ...m }); // yang di memori (mis. masih pending) menang
+      return { ...t, messages: [...byId.values()].sort((a, b) => a.createdAt - b.createdAt), loaded: true };
+    });
     try {
-      const { messages, hasMore } = await api<{ messages: StoredMessage[]; hasMore: boolean }>("GET", `/api/messages/${peer}`);
-      const decrypted = await Promise.all(messages.map((m) => this.decrypt(m)));
-      this.setThread(peer, (t) => {
-        const pending = t.messages.filter((m) => (m.status === "pending" || m.status === "failed") && !decrypted.some((d) => d.id === m.id));
-        return { messages: [...decrypted, ...pending].sort((a, b) => a.createdAt - b.createdAt), loaded: true, loading: false, hasMore };
-      });
+      const { pending, statuses } = await api<{ pending: StoredMessage[]; statuses: { id: string; status: MsgStatus }[] }>("GET", `/api/messages/${peer}`);
+      const decrypted = await Promise.all(pending.map((m) => this.decrypt(m)));
+      for (const msg of decrypted) this.upsert(peer, msg, false);
+      await keystore.putMessages(decrypted.map((m) => this.toLocal(peer, m)));
+      if (decrypted.length) this.rt.send({ t: "delivered", ids: decrypted.map((m) => m.id) });
+      for (const s of statuses) this.patchStatus([s.id], s.status);
+      this.setThread(peer, (t) => ({ ...t, loading: false }));
       if (this.state.activePeer === peer) this.markRead(peer);
     } catch (e) {
       this.setThread(peer, (t) => ({ ...t, loading: false }));
@@ -699,9 +805,15 @@ export class Messenger {
         const m = ev.message;
         const mine = m.from === this.state.me.id;
         const peer = mine ? m.to : m.from;
-        if (!mine) this.rt.send({ t: "delivered", ids: [m.id] });
         const msg = await this.decrypt(m);
-        if (this.state.threads[peer]?.loaded || this.state.activePeer === peer) this.upsert(peer, msg);
+        if (this.state.threads[peer]?.loaded || this.state.activePeer === peer) this.upsert(peer, msg, false);
+        // Simpan di perangkat DULU; baru konfirmasi agar relay menghapus ciphertext (anti hilang).
+        try {
+          await keystore.putMessages([this.toLocal(peer, msg)]);
+          if (!mine) this.rt.send({ t: "delivered", ids: [m.id] });
+        } catch {
+          this.toast("Gagal menyimpan pesan di perangkat ini — pesan tetap aman di relay dan dicoba lagi nanti.", "warn");
+        }
         if (!mine) {
           const c = this.contact(peer);
           if (this.state.activePeer === peer && document.visibilityState === "visible") this.markRead(peer);
@@ -741,6 +853,14 @@ export class Messenger {
         if (this.state.deals[ev.peer] || this.state.activePeer === ev.peer) await this.loadDeals(ev.peer);
         if (this.state.wallet) void this.loadWallet();
         break;
+      case "me_changed": {
+        // Mis. PIN utama dirotasi otomatis oleh server.
+        const prevPin = this.state.me.pin;
+        const { me } = await api<{ me: Me }>("GET", "/api/me");
+        this.set({ me });
+        if (me.pin !== prevPin) this.toast(`PIN utama dirotasi otomatis menjadi ${me.pin}. Kontakmu tetap terhubung.`, "info");
+        break;
+      }
       case "moments_changed":
         if (this.state.moments) await this.loadMoments().catch(() => {});
         break;

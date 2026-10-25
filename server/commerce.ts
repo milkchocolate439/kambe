@@ -9,7 +9,10 @@
 //  - Data identitas asli TIDAK pernah lewat sini — dibagikan sebagai pesan E2EE di chat.
 
 import type { IncomingMessage } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import type { Notary } from "./notary.ts";
+import type { PaymentProvider } from "./payments.ts";
+import { RECEIPT_KIND, type ReceiptBody, type SignedReceipt } from "../shared/receipt.ts";
 import { tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Handler, type Row, type UserRow } from "./http.ts";
 import {
@@ -23,6 +26,7 @@ import {
   TRACKING_RE,
   type DisputeReason,
   type ModDispute,
+  type PublicConfig,
   MAX_PRODUCTS,
   PRICE_MAX,
   PRICE_MIN,
@@ -56,6 +60,12 @@ export interface CommerceDeps {
   timers: DealTimers;
   isModerator: (u: UserRow) => boolean;
   moderatorIds: () => string[];
+  notary: Notary;
+  /** Fee platform per seribu (25 = 2,5%). Disalin ke setiap kesepakatan saat dibuat. */
+  feePerMille: number;
+  payments: PaymentProvider;
+  readRaw: (req: IncomingMessage, maxBytes?: number) => Promise<string>;
+  log: (msg: string) => void;
 }
 
 /**
@@ -95,6 +105,7 @@ const TRANSITIONS: Record<Actor, Table> = {
     DISPUTED: { refund: "REFUNDED" }, // penjual mengalah = dana kembali ke pembeli
   },
   system: {
+    AWAITING_PAYMENT: { pay: "HELD" }, // konfirmasi lunas dari webhook gateway
     SHIPPED: { confirm: "COMPLETED" }, // pencairan otomatis
     HELD: { refund: "REFUNDED" }, // penjual tak pernah mengirim
     DISPUTED: { refund: "REFUNDED" }, // sengketa kedaluwarsa
@@ -209,6 +220,12 @@ export function registerCommerce(d: CommerceDeps) {
       resolution: r.resolution
         ? { decision: r.resolution as "refund" | "release", reason: (r.resolution_reason as string) ?? "", at: (r.closed_at as number) ?? (r.updated_at as number) }
         : null,
+      payRef: (r.pay_ref as string | null) ?? "",
+      paymentUrl: status === "AWAITING_PAYMENT" ? ((r.payment_url as string | null) ?? null) : null,
+      receipt: (() => {
+        const l = latestReceipt(r.id as string);
+        return l ? ({ body: l.body, sig: l.sig } satisfies SignedReceipt) : null;
+      })(),
     };
   }
 
@@ -222,6 +239,43 @@ export function registerCommerce(d: CommerceDeps) {
   }
 
   const getDeal = (id: string) => db.prepare("SELECT * FROM deals WHERE id = ?").get(id) as Row | undefined;
+
+  // ---------------------------------------------------- notaris kuitansi ---
+
+  const PAYREF_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+  /** Kode bayar sekali pakai: acak, tanpa id/alias/PIN — tak bisa dikaitkan ke identitas (versi realistis "stealth"). */
+  function newPayRef(): string {
+    return "PP-" + [...randomBytes(10)].map((b) => PAYREF_ALPHABET[b & 31]).join("");
+  }
+
+  const latestReceipt = (dealId: string) =>
+    db.prepare("SELECT seq, body, sig FROM deal_receipts WHERE deal_id = ? ORDER BY seq DESC LIMIT 1").get(dealId) as
+      | { seq: number; body: string; sig: string }
+      | undefined;
+
+  /** Terbitkan kuitansi untuk keadaan kesepakatan SAAT INI (dipanggil di dalam transaksi yang sama). */
+  function issueReceipt(dealId: string, now: number) {
+    const r = getDeal(dealId)!;
+    const last = latestReceipt(dealId);
+    const body: ReceiptBody = {
+      v: 1,
+      kind: RECEIPT_KIND,
+      dealId,
+      seq: last ? last.seq + 1 : 0,
+      status: r.status as DealStatus,
+      buyerId: r.buyer_id as string,
+      sellerId: r.seller_id as string,
+      title: r.title as string,
+      price: r.price as number,
+      fee: r.fee as number,
+      sellerNet: (r.price as number) - (r.fee as number),
+      payRef: r.pay_ref as string,
+      at: now,
+      prev: last ? createHash("sha256").update(`${last.body}|${last.sig}`).digest("hex") : "",
+    };
+    const text = JSON.stringify(body);
+    db.prepare("INSERT INTO deal_receipts (deal_id, seq, body, sig, created_at) VALUES (?, ?, ?, ?, ?)").run(dealId, body.seq, text, d.notary.signBody(text), now);
+  }
 
   /**
    * Jalankan satu transisi status secara atomik. Mengembalikan baris terbaru,
@@ -253,9 +307,43 @@ export function registerCommerce(d: CommerceDeps) {
       if (action === "pay") post(ref, "deal_payment", dealId, [[`external:${r.buyer_id}`, -p], ["escrow", p]], now);
       if (action === "confirm") post(ref, "deal_release", dealId, [["escrow", -p], [`user:${r.seller_id}`, p - fee], ["platform", fee]], now);
       if (action === "refund") post(ref, "deal_refund", dealId, [["escrow", -p], [`external:${r.buyer_id}`, p]], now);
+      issueReceipt(dealId, now);
       return getDeal(dealId)!;
     });
   }
+
+  // ---------------------------------------------- konfigurasi & kuitansi ---
+
+  route("GET", "/api/config", () => ({ feePerMille: d.feePerMille, notaryPublicKey: d.notary.publicKey, paymentProvider: d.payments.name } satisfies PublicConfig));
+
+  // Webhook gateway: TANPA sesi & tanpa Origin (dikirim server gateway) — keasliannya dibuktikan token.
+  route("POST", "/api/payments/webhook/:provider", async ({ req, params }) => {
+    if (params.provider !== d.payments.name || d.payments.name === "simulasi") throw new HttpError(404, "not_found", "Endpoint tidak ditemukan");
+    const ev = d.payments.parseWebhook(req.headers, await d.readRaw(req, 64 * 1024));
+    if (!ev) throw new HttpError(403, "bad_webhook", "Webhook tidak sah");
+    const r = db.prepare("SELECT * FROM deals WHERE pay_ref = ?").get(ev.payRef) as Row | undefined;
+    if (!r) return { ok: true }; // bukan milik kita — jawab 200 agar gateway tidak mengulang terus
+    if (ev.status === "EXPIRED") {
+      db.prepare("UPDATE deals SET payment_url = NULL, provider_ref = NULL WHERE id = ? AND status = 'AWAITING_PAYMENT'").run(r.id as string);
+      notifyDeal(r);
+      return { ok: true };
+    }
+    // Nominal harus PERSIS harga kesepakatan; selisih = tanda manipulasi → jangan tandai lunas.
+    if (ev.amount !== r.price) {
+      d.log(`[pembayaran] nominal tidak cocok untuk ${r.id}: ${ev.amount} ≠ ${r.price as number}`);
+      throw new HttpError(409, "amount_mismatch", "Nominal tidak cocok");
+    }
+    if (r.status !== "AWAITING_PAYMENT") return { ok: true }; // webhook ulang → idempoten
+    notifyDeal(transition(r.id as string, "system", "pay"));
+    return { ok: true };
+  });
+
+  route("GET", "/api/deals/:id/receipts", authed(({ user, params }) => {
+    const r = getDeal(params.id);
+    if (!r || (r.buyer_id !== user.id && r.seller_id !== user.id && !d.isModerator(user))) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
+    const chain = db.prepare("SELECT body, sig FROM deal_receipts WHERE deal_id = ? ORDER BY seq ASC").all(params.id) as unknown as SignedReceipt[];
+    return { receipts: chain.map((x) => ({ body: x.body, sig: x.sig })) };
+  }));
 
   // ------------------------------------------------------------- PRO ---
 
@@ -363,9 +451,10 @@ export function registerCommerce(d: CommerceDeps) {
       if (open.n >= 30) throw new HttpError(429, "too_many_open", "Terlalu banyak kesepakatan menunggu pembayaran. Selesaikan/batalkan sebagian dulu.");
       const id = randomUUID();
       db.prepare(
-        `INSERT INTO deals (id, buyer_id, seller_id, created_by, product_id, title, price, fee, status, idem_key, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'AWAITING_PAYMENT', ?, ?, ?)`,
-      ).run(id, fields.buyer, fields.seller, fields.createdBy, fields.productId, fields.title, fields.price, platformFee(fields.price), fields.key, now, now);
+        `INSERT INTO deals (id, buyer_id, seller_id, created_by, product_id, title, price, fee, status, idem_key, created_at, updated_at, pay_ref)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'AWAITING_PAYMENT', ?, ?, ?, ?)`,
+      ).run(id, fields.buyer, fields.seller, fields.createdBy, fields.productId, fields.title, fields.price, platformFee(fields.price, d.feePerMille), fields.key, now, now, newPayRef());
+      issueReceipt(id, now); // kuitansi #0: kesepakatan dibuat
       return { row: getDeal(id)!, created: true };
     });
   }
@@ -444,6 +533,38 @@ export function registerCommerce(d: CommerceDeps) {
     if (!availableActions(role, r).includes(action)) {
       const early = role === "buyer" && r.status === "HELD" && action === "refund";
       throw new HttpError(409, "bad_transition", early ? "Penjual masih dalam batas waktu pengiriman. Tarik dana bisa dilakukan setelah batas itu lewat." : "Aksi ini tidak bisa dilakukan pada status kesepakatan sekarang");
+    }
+
+    // Mode gateway: "bayar" = buat invoice di server (kunci rahasia tetap di server) lalu kirim URL bayar.
+    // Status baru berubah menjadi HELD saat webhook lunas diterima & diverifikasi.
+    if (action === "pay" && d.payments.name !== "simulasi") {
+      if (r.payment_url) return toDeal(r, user.id); // invoice masih berlaku → jangan buat ganda
+      const seller = d.getUser(r.seller_id as string);
+      let started;
+      try {
+        started = await d.payments.start({
+          dealId: r.id as string,
+          payRef: r.pay_ref as string,
+          amount: r.price as number,
+          description: `PINPath ${r.pay_ref as string}`, // tanpa nama barang/identitas di gateway
+          sellerAccount: (seller as (UserRow & { gateway_account?: string | null }) | undefined)?.gateway_account ?? null,
+        });
+      } catch (e) {
+        if ((e as Error).message === "seller_account_missing") throw new HttpError(409, "seller_not_onboarded", "Penjual belum menghubungkan rekening pembayaran. Belum bisa dibayar.");
+        d.log(`[pembayaran] gagal membuat invoice ${r.id as string}: ${(e as Error).message}`);
+        throw new HttpError(502, "gateway_error", "Gateway pembayaran sedang bermasalah. Coba lagi sebentar.");
+      }
+      if (started.mode === "redirect") {
+        db.prepare("UPDATE deals SET payment_url = ?, provider_ref = ?, updated_at = ? WHERE id = ? AND status = 'AWAITING_PAYMENT'").run(
+          started.url,
+          started.providerRef,
+          Date.now(),
+          r.id as string,
+        );
+        const fresh = getDeal(r.id as string)!;
+        notifyDeal(fresh);
+        return toDeal(fresh, user.id);
+      }
     }
 
     let extra: Extra = {};

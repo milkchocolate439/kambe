@@ -160,6 +160,8 @@ async function main() {
       return JSON.stringify(await (await fetch(`/api/messages/${peer}`)).json());
     });
     check(!apiDump.includes("OTP") && !apiDump.includes("Halo!"), "respons server berisi ciphertext saja, tanpa plaintext");
+    const relay = JSON.parse(apiDump) as { pending: unknown[]; statuses: unknown[] };
+    check(relay.pending.length === 0 && relay.statuses.length >= 1, "relay: pesan yang sudah diterima tidak lagi disimpan server (hanya status)");
 
     // Muat ulang: pesan lama tetap bisa dibuka (kunci tersimpan di IndexedDB perangkat).
     await alice.reload();

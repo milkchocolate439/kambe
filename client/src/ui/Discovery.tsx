@@ -1,6 +1,6 @@
 // Fase 3 — Shadow PIN & radar ekonomi (opt-in).
 import { useEffect, useState } from "react";
-import { MAX_ACTIVE_SHADOW, RADAR_HEADLINE_MAX, SECTORS } from "../../../shared/protocol.ts";
+import { MAX_ACTIVE_ONCE, MAX_ACTIVE_SHADOW, RADAR_HEADLINE_MAX, SECTORS } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
 import { copyText, Modal, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
@@ -19,9 +19,11 @@ function remaining(ts: number) {
 export function ShadowPinModal({ onClose }: { onClose: () => void }) {
   const [s, m] = useMessenger();
   const [label, setLabel] = useState("");
+  const [once, setOnce] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pins = s.shadowPins?.filter((p) => p.kind === "shadow") ?? null;
+  const pins = s.shadowPins?.filter((p) => p.kind === "shadow" || p.kind === "once") ?? null;
+  const activeOfKind = pins?.filter((p) => p.kind === (once ? "once" : "shadow")).length ?? 0;
 
   useEffect(() => {
     void m.loadShadowPins().catch(() => setError("Gagal memuat Shadow PIN"));
@@ -58,8 +60,11 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
                   {p.pin}
                 </button>
                 <div className="grow">
-                  {p.label && <div className="small truncate" style={{ fontWeight: 700 }}>{p.label}</div>}
-                  <div className="tiny muted">Mati {remaining(p.expiresAt)} ({timeOf(p.expiresAt)})</div>
+                  <div className="row" style={{ gap: 6 }}>
+                    {p.kind === "once" && <span className="badge warn">SEKALI PAKAI</span>}
+                    {p.label && <span className="small truncate" style={{ fontWeight: 700 }}>{p.label}</span>}
+                  </div>
+                  <div className="tiny muted">Mati {remaining(p.expiresAt)} ({timeOf(p.expiresAt)}){p.kind === "once" ? " atau setelah dipakai sekali" : ""}</div>
                 </div>
                 <button className="btn small danger" disabled={busy} onClick={() => void run(() => m.revokeShadowPin(p.pin), `Shadow PIN ${p.pin} dicabut`)}>
                   Cabut
@@ -68,25 +73,35 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         )}
-        {pins && pins.length < MAX_ACTIVE_SHADOW && (
-          <div className="row">
-            <input className="input grow" maxLength={40} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (opsional), mis. Grup FB Rotan" aria-label="Label Shadow PIN" />
-            <button
-              className="btn primary"
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  const p = await m.createShadowPin(label.trim());
-                  setLabel("");
-                  if (await copyText(p.pin)) m.toast(`Shadow PIN ${p.pin} dibuat & disalin`, "ok");
-                })
-              }
-            >
-              <Icon name="plus" /> Buat
-            </button>
+        {pins && (
+          <div className="stack" style={{ gap: 8 }}>
+            <label className="row small" style={{ cursor: "pointer" }}>
+              <input type="checkbox" checked={once} onChange={(e) => setOnce(e.target.checked)} />
+              <span>
+                <strong>Sekali pakai</strong> — hangus otomatis setelah dipakai satu orang (cocok untuk dikirim ke satu calon pembeli)
+              </span>
+            </label>
+            <div className="row">
+              <input className="input grow" maxLength={40} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (opsional), mis. Grup FB Rotan" aria-label="Label Shadow PIN" />
+              <button
+                className="btn primary"
+                disabled={busy || activeOfKind >= (once ? MAX_ACTIVE_ONCE : MAX_ACTIVE_SHADOW)}
+                onClick={() =>
+                  void run(async () => {
+                    const p = await m.createShadowPin(label.trim(), once);
+                    setLabel("");
+                    if (await copyText(p.pin)) m.toast(`${once ? "PIN sekali pakai" : "Shadow PIN"} ${p.pin} dibuat & disalin`, "ok");
+                  })
+                }
+              >
+                <Icon name="plus" /> Buat
+              </button>
+            </div>
           </div>
         )}
-        <span className="hint">Maksimal {MAX_ACTIVE_SHADOW} Shadow PIN aktif sekaligus.</span>
+        <span className="hint">
+          Maksimal {MAX_ACTIVE_SHADOW} Shadow PIN dan {MAX_ACTIVE_ONCE} PIN sekali pakai aktif sekaligus.
+        </span>
         {error && <span className="error" role="alert">{error}</span>}
       </div>
     </Modal>

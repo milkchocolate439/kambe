@@ -8,6 +8,9 @@ import { HttpError, type AuthHandler, type Ctx, type Handler, type Row, type Use
 import { registerCommerce, type DealTimers } from "./commerce.ts";
 import { registerDiscovery } from "./discovery.ts";
 import { registerMoments } from "./moments.ts";
+import { createNotary } from "./notary.ts";
+import { simulatedProvider, type PaymentProvider } from "./payments.ts";
+import type { KeyObject } from "node:crypto";
 import {
   RateLimiter,
   burnTime,
@@ -29,6 +32,9 @@ import {
   PING_COOLDOWN_MS,
   PM_MAX,
   UUID_RE,
+  PIN_ROTATE_OPTIONS,
+  type PinRotateDays,
+  type ShadowKind,
   type ClientEvent,
   type Contact,
   type ContactsResponse,
@@ -51,12 +57,19 @@ export interface AppOptions {
   dealTimers?: Partial<DealTimers>;
   /** ID akun (UUID) moderator sengketa. Kosong = tidak ada moderator. */
   moderators?: string[];
+  /** Kunci privat Ed25519 notaris kuitansi. Kosong = kunci sementara (hanya untuk tes). */
+  notaryKey?: KeyObject;
+  /** Fee platform per seribu (default 25 = 2,5%; maks. 200 = 20%). */
+  feePerMille?: number;
+  /** Penyedia pembayaran. Default: simulasi (tanpa uang sungguhan). */
+  payments?: PaymentProvider;
   log?: (msg: string) => void;
 }
 
 const COOKIE = "pp_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const BODY_LIMIT = 32 * 1024;
+const MESSAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const WS_MAX_PAYLOAD = 64 * 1024;
 const HOUR = 60 * 60 * 1000;
 
@@ -105,6 +118,9 @@ export function createApp(opts: AppOptions) {
     log(`[peringatan] PINPATH_MODERATORS: "${bad}" bukan ID akun (UUID) — diabaikan. Cari ID dengan: node --import tsx scripts/moderator-id.ts <alias>`);
   }
   const isModerator = (u: UserRow) => moderatorIdSet.has(u.id);
+  const notary = createNotary(opts.notaryKey);
+  const feePerMille = opts.feePerMille ?? 25;
+  if (!Number.isInteger(feePerMille) || feePerMille < 0 || feePerMille > 200) throw new Error("feePerMille harus bilangan bulat 0–200 (0%–20%)");
 
   function toMe(u: UserRow): Me {
     return {
@@ -116,6 +132,8 @@ export function createApp(opts: AppOptions) {
       readReceipts: u.read_receipts === 1,
       createdAt: u.created_at,
       isModerator: isModerator(u),
+      pinRotateDays: ((PIN_ROTATE_OPTIONS as readonly number[]).includes(u.pin_rotate_days) ? u.pin_rotate_days : 0) as PinRotateDays,
+      pinRotatedAt: u.pin_rotated_at,
     };
   }
 
@@ -203,6 +221,18 @@ export function createApp(opts: AppOptions) {
     res.setHeader("Set-Cookie", sessionCookie(token, SESSION_TTL_MS));
   }
 
+  /** Body mentah (untuk verifikasi webhook yang harus melihat byte persis). */
+  async function readRaw(req: IncomingMessage, maxBytes = BODY_LIMIT): Promise<string> {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length;
+      if (size > maxBytes) throw new HttpError(413, "too_large", "Permintaan terlalu besar");
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+
   /** Batas default 32 KB; endpoint tertentu (mis. momen = banyak salinan terenkripsi) boleh meminta lebih. */
   async function readJson(req: IncomingMessage, maxBytes = BODY_LIMIT): Promise<Row> {
     const type = req.headers["content-type"] ?? "";
@@ -243,21 +273,30 @@ export function createApp(opts: AppOptions) {
       .trim();
   }
 
-  /** PIN unik di seluruh ruang PIN (utama + shadow + radar). */
+  /**
+   * PIN unik di seluruh ruang PIN (utama + shadow/sekali pakai/radar). PIN yang pernah dipakai untuk
+   * terhubung TIDAK didaur ulang — kontak masih melihatnya, jadi memberikannya ke orang lain bisa
+   * membuat orang salah sambung.
+   */
   function uniquePin(): string {
     for (let i = 0; i < 20; i++) {
       const pin = generatePin();
-      if (!q.userByPin.get(pin) && !db.prepare("SELECT 1 FROM shadow_pins WHERE pin = ?").get(pin)) return pin;
+      const taken =
+        q.userByPin.get(pin) ||
+        db.prepare("SELECT 1 FROM shadow_pins WHERE pin = ?").get(pin) ||
+        db.prepare("SELECT 1 FROM contacts WHERE via_pin = ? LIMIT 1").get(pin) ||
+        db.prepare("SELECT 1 FROM contact_requests WHERE via_pin = ? LIMIT 1").get(pin);
+      if (!taken) return pin;
     }
     throw new HttpError(503, "pin_exhausted", "Gagal membuat PIN unik, coba lagi");
   }
 
-  /** Cari pemilik PIN: PIN utama, atau Shadow/radar PIN yang MASIH aktif. */
-  function resolvePin(pin: string): { user: UserRow; via: { pin: string; kind: "shadow" | "radar"; label: string } | null } | null {
+  /** Cari pemilik PIN: PIN utama, atau Shadow/sekali pakai/radar PIN yang MASIH aktif. */
+  function resolvePin(pin: string): { user: UserRow; via: { pin: string; kind: ShadowKind; label: string } | null } | null {
     const direct = q.userByPin.get(pin) as UserRow | undefined;
     if (direct) return { user: direct, via: null };
     const sp = db.prepare("SELECT user_id, kind, label FROM shadow_pins WHERE pin = ? AND expires_at > ?").get(pin, Date.now()) as
-      | { user_id: string; kind: "shadow" | "radar"; label: string }
+      | { user_id: string; kind: ShadowKind; label: string }
       | undefined;
     const owner = sp && getUser(sp.user_id);
     return owner ? { user: owner, via: { pin, kind: sp.kind, label: sp.label } } : null;
@@ -288,11 +327,16 @@ export function createApp(opts: AppOptions) {
     return !!q.isContact.get(a, b) && !q.isBlocked.get(a, b, b, a);
   }
 
+  /**
+   * Relay store-and-forward: begitu penerima mengonfirmasi pesan sudah tersimpan di perangkatnya,
+   * ciphertext DIHAPUS dari server. Yang tersisa hanya metadata minimum (status D/R & hitungan
+   * belum dibaca), dan metadata pun dihapus setelah MESSAGE_RETENTION_MS.
+   */
   function markDelivered(recipientId: string, ids: string[]) {
     const now = Date.now();
     const bySender = new Map<string, string[]>();
     const find = db.prepare("SELECT sender_id FROM messages WHERE id = ? AND recipient_id = ? AND delivered_at IS NULL");
-    const upd = db.prepare("UPDATE messages SET delivered_at = ? WHERE id = ?");
+    const upd = db.prepare("UPDATE messages SET delivered_at = ?, nonce = '', ciphertext = '' WHERE id = ?");
     tx(db, () => {
       for (const id of ids.slice(0, 200)) {
         const row = find.get(id, recipientId) as { sender_id: string } | undefined;
@@ -342,8 +386,8 @@ export function createApp(opts: AppOptions) {
     const id = randomUUID();
     try {
       db.prepare(
-        "INSERT INTO users (id, alias, pin, pass_hash, recovery_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ).run(id, alias, uniquePin(), passHash, recoveryHash, Date.now());
+        "INSERT INTO users (id, alias, pin, pass_hash, recovery_hash, created_at, pin_rotated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(id, alias, uniquePin(), passHash, recoveryHash, Date.now(), Date.now());
     } catch {
       throw new HttpError(409, "alias_taken", "Alias sudah dipakai, pilih yang lain");
     }
@@ -434,13 +478,18 @@ export function createApp(opts: AppOptions) {
       if (typeof body.readReceipts !== "boolean") throw new HttpError(400, "bad_field", "readReceipts harus boolean");
       db.prepare("UPDATE users SET read_receipts = ? WHERE id = ?").run(body.readReceipts ? 1 : 0, user.id);
     }
+    if (body.pinRotateDays !== undefined) {
+      if (!(PIN_ROTATE_OPTIONS as readonly unknown[]).includes(body.pinRotateDays)) throw new HttpError(400, "bad_field", "Pilihan rotasi PIN: 0, 1, 7, atau 30 hari");
+      // Hitungan dimulai dari sekarang agar mengaktifkan fitur tidak langsung mengganti PIN tanpa terduga.
+      db.prepare("UPDATE users SET pin_rotate_days = ?, pin_rotated_at = ? WHERE id = ?").run(body.pinRotateDays as number, Date.now(), user.id);
+    }
     for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
     return { me: toMe(getUser(user.id)!) };
   }));
 
   route("POST", "/api/me/pin/rotate", authed(({ user }) => {
     limit(`pin-rotate:${user.id}`, 5, 24 * HOUR, "PIN sudah terlalu sering diganti hari ini.");
-    db.prepare("UPDATE users SET pin = ? WHERE id = ?").run(uniquePin(), user.id);
+    db.prepare("UPDATE users SET pin = ?, pin_rotated_at = ? WHERE id = ?").run(uniquePin(), Date.now(), user.id);
     // Undangan tertunda ke PIN lama ikut dibatalkan — itulah gunanya ganti PIN saat kena spam.
     db.prepare("DELETE FROM contact_requests WHERE to_id = ? AND via_pin IS NULL").run(user.id); // undangan lewat shadow/radar tetap
     for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
@@ -493,7 +542,7 @@ export function createApp(opts: AppOptions) {
     const incoming = (
       db
         .prepare(
-          `SELECT r.id, r.note, r.created_at, r.via_pin, s.kind AS via_kind, s.label AS via_label, u.id AS uid, u.alias, u.pin, u.pm
+          `SELECT r.id, r.note, r.created_at, r.via_pin, COALESCE(r.via_kind, s.kind) AS via_kind, s.label AS via_label, u.id AS uid, u.alias, u.pin, u.pm
            FROM contact_requests r JOIN users u ON u.id = r.from_id
            LEFT JOIN shadow_pins s ON s.pin = r.via_pin
            WHERE r.to_id = ? ORDER BY r.created_at DESC`,
@@ -505,7 +554,7 @@ export function createApp(opts: AppOptions) {
       note: r.note as string,
       createdAt: r.created_at as number,
       via: r.via_pin
-        ? { pin: r.via_pin as string, kind: ((r.via_kind as string | null) ?? "shadow") as "shadow" | "radar", label: (r.via_label as string | null) ?? "" }
+        ? { pin: r.via_pin as string, kind: ((r.via_kind as string | null) ?? "shadow") as ShadowKind, label: (r.via_label as string | null) ?? "" }
         : null,
     }));
     // Pengundang hanya melihat PIN yang ia ketik — PIN utama target tidak pernah bocor lewat shadow/radar.
@@ -555,8 +604,17 @@ export function createApp(opts: AppOptions) {
       throw new HttpError(409, "already_contacts", "Kalian sudah terhubung");
     }
 
+    // PIN sekali pakai hangus pada pemakaian pertama yang "berhasil" (termasuk jalur pura-pura blokir,
+    // supaya PIN itu tidak bisa dipakai untuk menguji apakah seseorang memblokir kita).
+    const burnOnce = () => {
+      if (found.via?.kind === "once") db.prepare("DELETE FROM shadow_pins WHERE pin = ? AND kind = 'once'").run(found.via.pin);
+    };
+
     // Diblokir? Pura-pura terkirim — pemblokir tidak boleh "ketahuan" memblokir.
-    if (q.isBlocked.get(user.id, target.id, target.id, user.id)) return { status: "pending" };
+    if (q.isBlocked.get(user.id, target.id, target.id, user.id)) {
+      burnOnce();
+      return { status: "pending" };
+    }
 
     // Kalau dia sudah lebih dulu mengundang kita, langsung terhubung (dua-duanya mau).
     const reverse = db.prepare("SELECT via_pin FROM contact_requests WHERE from_id = ? AND to_id = ?").get(target.id, user.id) as
@@ -564,6 +622,7 @@ export function createApp(opts: AppOptions) {
       | undefined;
     if (reverse) {
       connect(user.id, target.id, viaPin, reverse.via_pin);
+      burnOnce();
       emit(target.id, { t: "contacts_changed" });
       emit(user.id, { t: "contacts_changed" });
       return { status: "connected" };
@@ -575,16 +634,18 @@ export function createApp(opts: AppOptions) {
 
     const existing = db.prepare("SELECT 1 FROM contact_requests WHERE from_id = ? AND to_id = ?").get(user.id, target.id);
     if (!existing) {
-      db.prepare("INSERT INTO contact_requests (id, from_id, to_id, note, created_at, via_pin) VALUES (?, ?, ?, ?, ?, ?)").run(
+      db.prepare("INSERT INTO contact_requests (id, from_id, to_id, note, created_at, via_pin, via_kind) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
         randomUUID(),
         user.id,
         target.id,
         note,
         Date.now(),
         viaPin,
+        found.via?.kind ?? null,
       );
       emit(target.id, { t: "contacts_changed" });
     }
+    burnOnce();
     return { status: "pending" };
   }));
 
@@ -652,26 +713,23 @@ export function createApp(opts: AppOptions) {
 
   // ---- pesan ----
 
-  route("GET", "/api/messages/:peer", authed(({ user, params, url }) => {
+  // Server BUKAN arsip: yang dikembalikan hanya pesan masuk yang belum diambil (masih berciphertext)
+  // + status pesan yang kita kirim. Riwayat lengkap tinggal di perangkat (mesin lokal klien).
+  // Penerima wajib mengirim `delivered` SETELAH menyimpan lokal — baru saat itu ciphertext dihapus.
+  route("GET", "/api/messages/:peer", authed(({ user, params }) => {
     const peer = getUser(params.peer);
     if (!peer || !q.isContact.get(user.id, peer.id)) throw new HttpError(404, "not_found", "Percakapan tidak ditemukan");
-    const before = Number(url.searchParams.get("before")) || Number.MAX_SAFE_INTEGER;
-    const rows = db
-      .prepare(
-        `SELECT * FROM messages
-         WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)) AND created_at < ?
-         ORDER BY created_at DESC LIMIT 100`,
-      )
-      .all(user.id, peer.id, peer.id, user.id, before) as Row[];
-    const undelivered = rows.filter((r) => r.recipient_id === user.id && !r.delivered_at).map((r) => r.id as string);
-    if (undelivered.length) markDelivered(user.id, undelivered);
-    const messages = rows.reverse().map((r) =>
-      toMessage(
-        r.recipient_id === user.id && undelivered.includes(r.id as string) ? { ...r, delivered_at: Date.now() } : r,
-        (r.recipient_id === user.id ? user.read_receipts : peer.read_receipts) === 1,
-      ),
-    );
-    return { messages, hasMore: rows.length === 100 };
+    const pending = (
+      db
+        .prepare("SELECT * FROM messages WHERE sender_id = ? AND recipient_id = ? AND delivered_at IS NULL ORDER BY created_at ASC LIMIT 500")
+        .all(peer.id, user.id) as Row[]
+    ).map((r) => toMessage(r, user.read_receipts === 1));
+    const statuses = (
+      db
+        .prepare("SELECT id, delivered_at, read_at, created_at FROM messages WHERE sender_id = ? AND recipient_id = ? ORDER BY created_at DESC LIMIT 500")
+        .all(user.id, peer.id) as Row[]
+    ).map((r) => ({ id: r.id as string, status: messageStatus(r, peer.read_receipts === 1), createdAt: r.created_at as number }));
+    return { pending, statuses };
   }));
 
   // ---- Fase 2: etalase, kesepakatan rekber (simulasi), buku besar ----
@@ -697,11 +755,33 @@ export function createApp(opts: AppOptions) {
     },
     isModerator,
     moderatorIds: () => [...moderatorIdSet],
+    notary,
+    feePerMille,
+    payments: opts.payments ?? simulatedProvider,
+    readRaw,
+    log,
   });
 
   // ---- Fase 3: Shadow PIN & radar ekonomi (opt-in) ----
 
   const discovery = registerDiscovery({ db, route, authed, readJson, str, cleanText, limit, uniquePin });
+
+  /**
+   * PIN dinamis: ganti PIN utama pengguna yang mengaktifkan rotasi otomatis. Kontak yang sudah
+   * terhubung tidak terputus; undangan yang sudah masuk tetap ada (berbeda dengan ganti PIN manual
+   * karena spam). Orang luar yang menyimpan PIN lama tidak bisa memakainya lagi.
+   */
+  function runPinRotation(now = Date.now()): number {
+    const due = db
+      .prepare("SELECT id FROM users WHERE pin_rotate_days > 0 AND pin_rotated_at + pin_rotate_days * 86400000 <= ?")
+      .all(now) as { id: string }[];
+    for (const { id } of due) {
+      db.prepare("UPDATE users SET pin = ?, pin_rotated_at = ? WHERE id = ?").run(uniquePin(), now, id);
+      emit(id, { t: "me_changed" });
+      for (const row of q.contactIds.all(id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
+    }
+    return due.length;
+  }
   const moments = registerMoments({ db, route, authed, readJson, limit, emit, getUser, areContacts });
 
   // ------------------------------------------------------- static files ---
@@ -782,7 +862,10 @@ export function createApp(opts: AppOptions) {
     try {
       if (url.pathname.startsWith("/api/")) {
         const method = req.method ?? "GET";
-        if (method !== "GET" && method !== "HEAD" && !originAllowed(req)) {
+        // Pengecualian SATU-SATUNYA: webhook gateway (server-ke-server, tanpa Origin & tanpa cookie);
+        // keasliannya diverifikasi token gateway di handler-nya.
+        const isWebhook = method === "POST" && url.pathname.startsWith("/api/payments/webhook/");
+        if (method !== "GET" && method !== "HEAD" && !isWebhook && !originAllowed(req)) {
           throw new HttpError(403, "bad_origin", "Permintaan lintas-situs ditolak");
         }
         limit(`api:${ctx.ip}`, 300, 60 * 1000, "Terlalu banyak permintaan. Pelan-pelan dulu.");
@@ -947,7 +1030,7 @@ export function createApp(opts: AppOptions) {
       const now = Date.now();
       const changed: string[] = [];
       const upd = db.prepare(
-        "UPDATE messages SET read_at = ?, delivered_at = COALESCE(delivered_at, ?) WHERE id = ? AND recipient_id = ? AND sender_id = ? AND read_at IS NULL",
+        "UPDATE messages SET read_at = ?, delivered_at = COALESCE(delivered_at, ?), nonce = '', ciphertext = '' WHERE id = ? AND recipient_id = ? AND sender_id = ? AND read_at IS NULL",
       );
       tx(db, () => {
         for (const id of ev.ids.slice(0, 200)) {
@@ -977,8 +1060,11 @@ export function createApp(opts: AppOptions) {
 
   const janitor = setInterval(() => {
     db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(Date.now());
+    // Relay, bukan arsip: ciphertext yang tak pernah diambil & metadata status dihapus setelah 30 hari.
+    db.prepare("DELETE FROM messages WHERE created_at <= ?").run(Date.now() - MESSAGE_RETENTION_MS);
     discovery.sweep();
     moments.sweep();
+    runPinRotation();
     limiter.sweep(24 * HOUR);
   }, 10 * 60 * 1000);
   const releaser = setInterval(() => {
@@ -997,6 +1083,8 @@ export function createApp(opts: AppOptions) {
     server,
     db,
     runTimers: commerce.runTimers,
+    runPinRotation,
+    notaryPublicKey: notary.publicKey,
     /** Ganti daftar moderator (ID akun) saat berjalan — dipakai tes; produksi memakai env saat start. */
     setModerators(ids: string[]) {
       moderatorIdSet.clear();

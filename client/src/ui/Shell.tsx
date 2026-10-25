@@ -95,6 +95,12 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
           </div>
         </div>
       )}
+      {s.notaryAlert && (
+        <div className="banner danger" role="alert">
+          <Icon name="alert" />
+          <span className="small">{s.notaryAlert}</span>
+        </div>
+      )}
       {s.conn === "offline" && s.device === "ok" && (
         <div className="banner warn">
           <Icon name="wifiOff" />

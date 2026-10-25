@@ -104,6 +104,8 @@ async function main() {
     await card.waitFor();
     check((await card.textContent())?.includes("Rp850.000"), "kartu kesepakatan muncul di chat dengan harga dari server");
     check((await card.textContent())?.includes("SIMULASI"), "label SIMULASI selalu terlihat");
+    await card.getByText(/Kuitansi #0 sah \(ditandatangani notaris\)/).waitFor();
+    check(true, "kuitansi notaris #0 diverifikasi di perangkat pembeli");
 
     await dealAction(buyer, "Arabica Gayo Wine 5 Kg", "Bayar ke rekber");
     await card.getByText("Dana ditahan rekber").waitFor();
@@ -141,6 +143,9 @@ async function main() {
     await card.getByText("Selesai · dana cair").waitFor();
     await seller.locator(".deal-card", { hasText: "Selesai · dana cair" }).waitFor();
     check(true, "dana cair dan status selesai di kedua sisi");
+    await card.getByText(/Kuitansi #3 sah/).waitFor();
+    await seller.locator(".deal-card", { hasText: "Arabica Gayo Wine 5 Kg" }).getByText(/Kuitansi #3 sah/).waitFor();
+    check(true, "rantai kuitansi #0→#3 sah di kedua perangkat");
     await seller.getByRole("button", { name: "Toko & Dompet" }).click();
     await seller.getByRole("tab", { name: "Dompet" }).click();
     await seller.getByText("Rp828.750").first().waitFor();
