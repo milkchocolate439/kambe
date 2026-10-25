@@ -4,6 +4,7 @@ import { api, ApiError } from "../lib/api.ts";
 import { keystore } from "../lib/keystore.ts";
 import { Modal, Switch, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+import { VaultPanel } from "./Vault.tsx";
 
 type Run = (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
 
@@ -93,6 +94,10 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
 
         <div className="divider" />
 
+        <VaultPanel />
+
+        <div className="divider" />
+
         <div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Diblokir</div>
           {blocked === null ? (
@@ -130,7 +135,7 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
           <button className="btn block" disabled={busy} onClick={() => void run(async () => { await api("POST", "/api/auth/logout-all"); onSignedOut("logout_all"); })}>
             <Icon name="logout" /> Keluar dari semua perangkat
           </button>
-          <span className="hint">Kunci enkripsi tetap tersimpan di perangkat ini, jadi pesan lama masih bisa dibuka saat kamu masuk lagi.</span>
+          <span className="hint">Saat keluar, kunci enkripsi yang terbuka dihapus dari perangkat ini. Riwayat tetap ada tapi terkunci — terbuka lagi saat kamu masuk dengan passphrase.</span>
           <button className="btn danger block" onClick={() => setDanger("delete")}>
             <Icon name="trash" /> Hapus akun permanen
           </button>

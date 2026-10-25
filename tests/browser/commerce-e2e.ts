@@ -29,6 +29,9 @@ async function signup(page: Page, alias: string) {
   await page.getByRole("button", { name: "Buat akun" }).click();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Lanjut ke PINPath" }).click();
+  await page.getByText("Simpan frasa kunci perangkat").waitFor();
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
   await page.locator(".dot.online").waitFor();
   return (await page.locator(".pin-big").textContent()) ?? "";
 }
@@ -128,6 +131,7 @@ async function main() {
     await card.getByRole("button", { name: "Bagikan identitas" }).click();
     await buyer.getByLabel("Nama penerima").fill("Budi Santoso");
     await buyer.getByLabel("Alamat pengiriman").fill("Jl. Tjilik Riwut Km 5, Palangka Raya");
+    await buyer.getByText("Ingat di perangkat ini").click();
     await buyer.getByText(/tidak bisa ditarik kembali/).click();
     await buyer.getByRole("button", { name: "Kirim terenkripsi" }).click();
     await seller.locator(".bubble.identity", { hasText: "Budi Santoso" }).waitFor();
@@ -137,6 +141,29 @@ async function main() {
       return JSON.stringify(await (await fetch(`/api/messages/${c.contacts[0].id}`)).json());
     });
     check(!dump.includes("Budi") && !dump.includes("Tjilik"), "server TIDAK pernah melihat nama/alamat (hanya ciphertext)");
+    // Alamat yang "diingat" disimpan di brankas terenkripsi, bukan teks polos di disk HP.
+    const disk = await buyer.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((res) => {
+        const r = indexedDB.open("pinpath");
+        r.onsuccess = () => res(r.result);
+      });
+      const all: unknown[] = [];
+      for (const name of [...db.objectStoreNames]) {
+        all.push(await new Promise((res) => {
+          const r = db.transaction(name).objectStore(name).getAll();
+          r.onsuccess = () => res(r.result);
+        }));
+      }
+      db.close();
+      return JSON.stringify(all) + JSON.stringify({ ...localStorage });
+    });
+    check(!disk.includes("Tjilik") && !disk.includes("Budi Santoso"), "alamat yang diingat terenkripsi di perangkat (IndexedDB & localStorage tanpa teks polos)");
+    await card.getByRole("button", { name: "Bagikan identitas" }).click();
+    const filled = await buyer
+      .waitForFunction(() => (document.getElementById("id-address") as HTMLTextAreaElement | null)?.value === "Jl. Tjilik Riwut Km 5, Palangka Raya", null, { timeout: 5000 })
+      .then(() => true, () => false);
+    check(filled, "alamat yang diingat terisi otomatis dari brankas");
+    await buyer.keyboard.press("Escape");
 
     // Pembeli konfirmasi → dana cair ke penjual.
     await dealAction(buyer, "Arabica Gayo Wine 5 Kg", "Barang diterima · cairkan");
@@ -184,6 +211,13 @@ async function main() {
     await mod.getByLabel("Alias (nama samaran)").fill("Moderator_Satu");
     await mod.locator("#pass").fill(PASS);
     await mod.getByRole("button", { name: "Masuk" }).click();
+    // Akun moderator dibuat lewat API (kunci Node) → di browser ini perangkat baru tanpa frasa kunci.
+    await mod.getByRole("tab", { name: "Mulai baru" }).click();
+    await mod.getByRole("checkbox").check();
+    await mod.getByRole("button", { name: "Mulai dengan frasa kunci baru" }).click();
+    await mod.getByText("Simpan frasa kunci perangkat").waitFor();
+    await mod.getByRole("checkbox").check();
+    await mod.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
     await mod.getByRole("button", { name: "Moderasi sengketa" }).click();
     await mod.getByText("Roasting kustom 2 Kg").waitFor();
     check(await mod.getByText(/bukan dark seperti disepakati/).isVisible(), "moderator membaca pernyataan pembeli");

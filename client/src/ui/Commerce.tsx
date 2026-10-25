@@ -1,5 +1,5 @@
 // Fase 2 — etalase, kesepakatan rekber, identitas terenkripsi, dompet. SEMUA SIMULASI.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   FEE_PER_MILLE,
   PRICE_MAX,
@@ -411,33 +411,38 @@ export function OfferModal({ peer, peerAlias, onClose }: { peer: string; peerAli
 
 // ------------------------------------------- identitas terenkripsi E2EE ---
 
-const ID_STORE = (me: string) => `pinpath:identity:${me}`;
-
 export function IdentityModal({ peer, peerAlias, onClose }: { peer: string; peerAlias: string; onClose: () => void }) {
-  const [s, m] = useMessenger();
-  const saved = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem(ID_STORE(s.me.id)) ?? "null") as { name: string; address: string; contact: string } | null;
-    } catch {
-      return null;
-    }
-  }, [s.me.id]);
-  const [name, setName] = useState(saved?.name ?? "");
-  const [address, setAddress] = useState(saved?.address ?? "");
-  const [contact, setContact] = useState(saved?.contact ?? "");
+  const [, m] = useMessenger();
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [contact, setContact] = useState("");
   const [note, setNote] = useState("");
-  const [remember, setRemember] = useState(!!saved);
+  const [remember, setRemember] = useState(false);
   const [sure, setSure] = useState(false);
+
+  // Alamat yang diingat ada di brankas terenkripsi perangkat (bukan localStorage polos).
+  useEffect(() => {
+    let alive = true;
+    void m.getSavedShipping().then((saved) => {
+      if (!alive || !saved) return;
+      setName((v) => v || saved.name);
+      setAddress((v) => v || saved.address);
+      setContact((v) => v || saved.contact);
+      setRemember(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [m]);
 
   async function share() {
     const text = [`Nama: ${name.trim()}`, address.trim() && `Alamat: ${address.trim()}`, contact.trim() && `Kontak: ${contact.trim()}`, note.trim() && `Catatan: ${note.trim()}`]
       .filter(Boolean)
       .join("\n");
     try {
-      if (remember) localStorage.setItem(ID_STORE(s.me.id), JSON.stringify({ name, address, contact }));
-      else localStorage.removeItem(ID_STORE(s.me.id));
+      await m.setSavedShipping(remember ? { name, address, contact } : null);
     } catch {
-      /* penyimpanan diblokir — tidak apa-apa */
+      m.toast("Gagal menyimpan alamat di brankas perangkat — identitas tetap bisa dikirim.", "warn");
     }
     if (await m.shareIdentity(peer, text)) {
       m.toast(`Identitas dikirim terenkripsi ke ${peerAlias}`, "ok");

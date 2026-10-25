@@ -51,9 +51,28 @@ async function signup(page: Page, alias: string) {
   const code = await page.getByLabel("Kode pemulihan").textContent();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Lanjut ke PINPath" }).click();
+  await page.getByText("Simpan frasa kunci perangkat").waitFor();
+  const seed = await page.getByLabel("Frasa kunci perangkat").textContent();
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
   await page.locator(".pin-big").waitFor();
   await page.locator(".dot.online").waitFor();
-  return { code: code ?? "", pin: (await page.locator(".pin-big").textContent()) ?? "" };
+  return { code: code ?? "", seed: seed ?? "", pin: (await page.locator(".pin-big").textContent()) ?? "" };
+}
+
+/** Masuk di perangkat yang belum punya brankas → pilih "Mulai baru" (kunci baru). */
+async function loginFreshDevice(page: Page, alias: string) {
+  await page.goto(BASE);
+  await page.getByLabel("Alias (nama samaran)").fill(alias);
+  await page.locator("#pass").fill(PASS);
+  await page.getByRole("button", { name: "Masuk" }).click();
+  await page.getByRole("tab", { name: "Mulai baru" }).click();
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Mulai dengan frasa kunci baru" }).click();
+  await page.getByText("Simpan frasa kunci perangkat").waitFor();
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
+  await page.locator(".pin-big").waitFor();
 }
 
 async function main() {
@@ -169,15 +188,11 @@ async function main() {
     await alice.getByText("Boleh minta kode OTP").waitFor();
     check(true, "setelah reload, riwayat terdekripsi lagi dari kunci perangkat");
 
-    // Bob ganti perangkat (konteks baru, login ulang) → alice dapat peringatan safety number berubah.
+    // Bob ganti perangkat TANPA frasa kunci ("mulai baru") → alice dapat peringatan safety number berubah.
     const ctxB2 = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true });
     const bob2 = await ctxB2.newPage();
     watch(bob2, "bob2", problems);
-    await bob2.goto(BASE);
-    await bob2.getByLabel("Alias (nama samaran)").fill("KopiGayo_Roaster");
-    await bob2.locator("#pass").fill(PASS);
-    await bob2.getByRole("button", { name: "Masuk" }).click();
-    await bob2.locator(".pin-big").waitFor();
+    await loginFreshDevice(bob2, "KopiGayo_Roaster");
     await alice.getByText(/Safety number dengan KopiGayo_Roaster berubah/).waitFor({ timeout: 8000 });
     check(true, "alice diperingatkan saat kunci bob berubah (deteksi MITM)");
     check(await alice.getByLabel("Tulis pesan").isDisabled(), "pengiriman dikunci sampai alice meninjau perubahan");

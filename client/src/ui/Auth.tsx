@@ -5,19 +5,21 @@ import { copyText } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 
 type Mode = "login" | "signup" | "recover";
+export type AuthKind = Mode;
 
-export function Auth({ onAuthed, notice }: { onAuthed: (me: Me) => void; notice?: string | null }) {
+/** Passphrase ikut diteruskan (hanya di memori) untuk membuka/membuat brankas perangkat. */
+export function Auth({ onAuthed, notice, initialAlias }: { onAuthed: (me: Me, passphrase: string, kind: AuthKind) => void; notice?: string | null; initialAlias?: string }) {
   const [mode, setMode] = useState<Mode>("login");
-  const [alias, setAlias] = useState("");
+  const [alias, setAlias] = useState(initialAlias ?? "");
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
   const [code, setCode] = useState("");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recovery, setRecovery] = useState<{ code: string; me: Me } | null>(null);
+  const [recovery, setRecovery] = useState<{ code: string; me: Me; kind: AuthKind } | null>(null);
 
-  if (recovery) return <RecoveryCodeScreen code={recovery.code} onDone={() => onAuthed(recovery.me)} />;
+  if (recovery) return <RecoveryCodeScreen code={recovery.code} onDone={() => onAuthed(recovery.me, pass, recovery.kind)} />;
 
   const aliasProblem = alias && !ALIAS_RE.test(alias) ? "3–24 karakter: huruf, angka, atau garis bawah (_)" : null;
   const passProblem =
@@ -40,13 +42,13 @@ export function Auth({ onAuthed, notice }: { onAuthed: (me: Me) => void; notice?
     try {
       if (mode === "login") {
         const r = await api<{ me: Me }>("POST", "/api/auth/login", { alias, passphrase: pass });
-        onAuthed(r.me);
+        onAuthed(r.me, pass, "login");
       } else if (mode === "signup") {
         const r = await api<{ me: Me; recoveryCode: string }>("POST", "/api/auth/signup", { alias, passphrase: pass });
-        setRecovery({ code: r.recoveryCode, me: r.me });
+        setRecovery({ code: r.recoveryCode, me: r.me, kind: "signup" });
       } else {
         const r = await api<{ me: Me; recoveryCode: string }>("POST", "/api/auth/recover", { alias, recoveryCode: code, newPassphrase: pass });
-        setRecovery({ code: r.recoveryCode, me: r.me });
+        setRecovery({ code: r.recoveryCode, me: r.me, kind: "recover" });
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Terjadi kesalahan. Coba lagi.");
@@ -165,7 +167,7 @@ export function Auth({ onAuthed, notice }: { onAuthed: (me: Me) => void; notice?
               <div><Icon name="check" size={16} /> Orang asing harus kamu setujui dulu sebelum bisa mengirim pesan.</div>
             </div>
           )}
-          {mode === "recover" && <p className="hint">Pemulihan mengganti passphrase dan mengeluarkan semua perangkat lain. Pesan lama hanya terbaca di perangkat yang dulu dipakai.</p>}
+          {mode === "recover" && <p className="hint">Pemulihan mengganti passphrase dan mengeluarkan semua perangkat lain. Kunci enkripsi pesan dibuka terpisah dengan frasa kunci perangkat (atau passphrase lama).</p>}
         </div>
       </div>
     </div>

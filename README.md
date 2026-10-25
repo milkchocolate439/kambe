@@ -40,9 +40,9 @@ Variabel lingkungan (opsional):
 ## Pengujian
 
 ```bash
-pnpm test           # 88 tes (termasuk relay, notaris kuitansi, gateway tiruan, PIN dinamis): kriptografi, API/WebSocket, uang/rekber, sengketa/moderator, Shadow PIN/radar, Moments
-                    # (server sungguhan, DB di memori), termasuk regresi semua temuan red-team
-pnpm build && pnpm test:browser   # 3 suite Chromium headless: chat (21), dagang+moderator (24), Fase 3 (14)
+pnpm test           # 104 tes: kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
+                    # sengketa/moderator, Shadow PIN/radar, Moments, notaris (server sungguhan, DB di memori) + regresi red-team
+pnpm build && pnpm test:browser   # 4 suite Chromium headless: chat, dagang+moderator, Fase 3, brankas perangkat
 ```
 
 Tes browser mencakup: undangan PIN, chat E2EE, status D/R, PING!!!, safety number,
@@ -53,7 +53,10 @@ audit pelanggaran CSP, dan tata letak HP tanpa scroll horizontal. Screenshot di 
 
 | Lapisan | Mekanisme |
 |---|---|
-| Kunci identitas | X25519 per perangkat, dibuat di browser, **non-extractable** (tidak bisa dibaca skrip), disimpan di IndexedDB |
+| Kunci identitas | X25519 diturunkan dari **frasa kunci** (seed 256-bit milik pengguna, tidak pernah ke server); dipakai sebagai CryptoKey **non-extractable** |
+| Data di perangkat | Riwayat, pin kunci, alamat yang diingat: AES-256-GCM per rekaman. Seed dibungkus passphrase (PBKDF2 600k). Keluar = kunci dihapus, data terkunci |
+| Cadangan | File `.pinpath` terenkripsi kunci turunan frasa kunci; dipulihkan di HP baru tanpa mengubah safety number |
+| Isi selain chat | Status, catatan undangan, produk, judul/bukti kirim/pernyataan/putusan sengketa, label: *sealed object* multi-penerima (lihat `docs/ARSITEKTUR.md`) |
 | Kunci percakapan | HKDF-SHA256 dari ECDH; salt mengikat id + kunci publik kedua pihak |
 | Isi pesan | AES-256-GCM, nonce acak 96-bit, AAD mengikat id pesan + pengirim + penerima + kedua kunci (anti tukar/replay) |
 | Anti-MITM | Safety number 60 digit + *key pinning* (TOFU). Kunci lawan berubah → peringatan & kirim dikunci sampai ditinjau |
@@ -65,16 +68,19 @@ audit pelanggaran CSP, dan tata letak HP tanpa scroll horizontal. Screenshot di 
 
 ### Yang **diketahui server** (metadata)
 
-Alias, PIN, status pribadi (pm), siapa terhubung dengan siapa, waktu kirim, ukuran ciphertext,
-dan apakah sebuah pesan adalah PING (untuk rate limit). Catatan undangan tidak terenkripsi (diberi label di UI).
+Alias, PIN, siapa terhubung dengan siapa, waktu kirim, ukuran ciphertext, apakah sebuah pesan adalah PING
+(untuk rate limit), serta harga/fee/status kesepakatan (wajib untuk rekber & fee 5%). Semua **isi** tulisan
+pengguna hanya tersimpan sebagai ciphertext.
 
 ### Batasan saat ini (jujur)
 
 - **Belum ada forward secrecy**: kunci percakapan statis per pasangan perangkat. Bila kunci privat
   perangkat dicuri, pesan lama pasangan itu bisa dibuka. → Fase 2: Double Ratchet.
-- **Satu perangkat aktif per akun**. Login di perangkat baru = kunci baru; pesan lama hanya terbaca di perangkat lama.
-- Riwayat hanya ada di perangkat (local-first; server menghapus ciphertext setelah terkirim). Ganti/instal ulang
-  perangkat = riwayat lama tidak ikut — master seed + cadangan terenkripsi direncanakan.
+- **Satu perangkat aktif per akun** dalam satu waktu. Pindah HP: pakai frasa kunci (kunci sama) + file cadangan
+  untuk riwayat lama. Tanpa frasa kunci = kunci baru, dan pesan lama hanya terbaca di perangkat lama.
+- Riwayat hanya ada di perangkat (local-first; server menghapus ciphertext setelah terkirim). Cadangan dibuat manual.
+- Passphrase dipakai untuk login **dan** membuka brankas lokal: operator server jahat yang juga mencuri disk HP
+  bisa membuka brankas. Frasa kunci sendiri tidak pernah dikirim ke server.
 - Rate limiter di memori (cukup untuk satu instance). Skala banyak instance → Redis.
 - Keamanan E2EE tetap bergantung pada server yang menyajikan kode JS dengan jujur (keterbatasan semua web app E2EE).
   APK/app ter-install mengurangi risiko ini.

@@ -91,7 +91,26 @@ Aturan di server:
 | Iklan radar (citra) | Memang publik bagi peserta radar |
 | Pilihan putusan moderator (refund/release) | Menggerakkan uang |
 
-### 3b. Ringkasan
+### 3b. Di perangkat: brankas & frasa kunci (Tahap 2)
+
+| Komponen | Cara kerja |
+|---|---|
+| **Frasa kunci** | Seed acak 256-bit, ditulis sebagai 14 grup × 4 karakter Crockford base32 dengan checksum 20-bit (salah ketik langsung ketahuan). Tidak pernah dikirim ke server. |
+| Kunci identitas | X25519 diturunkan dari seed dengan HKDF. Memulihkan frasa di HP baru menghasilkan kunci publik yang **sama**, jadi kontak tidak melihat "safety number berubah". |
+| Kunci riwayat & cadangan | HKDF(seed, label + id akun) → AES-256-GCM non-extractable. Kedua kunci ini terpisah dari kunci identitas. |
+| **Brankas** | Seed dibungkus passphrase (PBKDF2-SHA256 600.000 iterasi → AES-256-GCM, AAD = akun + kunci publik). |
+| Riwayat, pin kunci kontak, alamat yang diingat, pin notaris, seq kuitansi | Dienkripsi per rekaman di IndexedDB. AAD mengikat kunci rekaman, jadi rekaman tidak bisa ditukar. Yang polos hanya (pemilik, lawan, waktu) untuk pengurutan. |
+| **Keluar** | Kunci yang sedang terbuka dihapus. Di disk hanya tersisa brankas berpassphrase + ciphertext. Masuk lagi dengan passphrase membuka kembali riwayat. |
+| Muat ulang halaman | Kunci terbuka (CryptoKey non-extractable) tetap ada selama sesi, jadi tidak perlu mengetik passphrase lagi. |
+| **Cadangan** | File `.pinpath` dienkripsi dengan kunci cadangan, terikat ke akun dan waktu pembuatan. File disimpan pengguna sendiri, tidak diunggah ke server. Bisa dipulihkan di HP baru dengan frasa yang sama, atau dengan frasa lama setelah "mulai baru". |
+| Migrasi data lama | Riwayat/pin polos dari sebelum Tahap 2 dienkripsi ulang otomatis. Alamat polos di `localStorage` dipindah ke brankas lalu dihapus. Kunci perangkat acak lama dibuang. |
+
+Batas yang jujur:
+
+- Saat sedang masuk, perangkat yang dibobol (malware/root) tetap bisa memakai kunci yang terbuka.
+- Passphrase juga dipakai untuk login. Artinya operator server yang jahat **sekaligus** memegang disk HP bisa membuka brankas. Frasa kunci tetap tidak pernah ke server.
+
+### 3c. Ringkasan
 
 | Data | Disimpan server? |
 |---|---|
@@ -135,4 +154,5 @@ Server ──(6) kuitansi bertanda tangan Ed25519──▶ kedua ponsel (diverif
 | Penyedia pembayaran | `server/payments.ts` |
 | Kripto bersama | `shared/e2ee.ts`, `shared/sealed.ts` |
 | Penyimpanan sealed object | `server/sealed.ts` |
-| Mesin lokal klien | `client/src/lib/messenger.ts`, `client/src/lib/localstore.ts`, `client/src/lib/keystore.ts` |
+| Mesin lokal klien | `client/src/lib/messenger.ts`, `client/src/lib/keystore.ts` |
+| Brankas & frasa kunci | `shared/vault.ts`, `client/src/lib/device.ts`, `client/src/ui/Vault.tsx` |

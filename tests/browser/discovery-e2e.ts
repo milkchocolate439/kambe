@@ -25,6 +25,9 @@ async function signup(page: Page, alias: string) {
   await page.getByRole("button", { name: "Buat akun" }).click();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Lanjut ke PINPath" }).click();
+  await page.getByText("Simpan frasa kunci perangkat").waitFor();
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
   await page.locator(".dot.online").waitFor();
   return (await page.locator(".pin-big").first().textContent()) ?? "";
 }

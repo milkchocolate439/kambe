@@ -5,7 +5,6 @@ import {
   type MomentType,
   E2EEError,
   encryptPayload,
-  generateIdentity,
   safetyNumber,
   type Envelope,
   type Identity,
@@ -35,7 +34,8 @@ import {
   type Wallet,
 } from "../../../shared/protocol.ts";
 import { api, ApiError } from "./api.ts";
-import { keystore, type LocalMessage, type PinnedKey } from "./keystore.ts";
+import { keystore, type LocalMessage, type PinnedKey, type UnlockedDevice } from "./keystore.ts";
+import { BACKUP_MAX_BYTES, decryptBackup, encryptBackup } from "../../../shared/vault.ts";
 import { parseReceipt, verifyReceipt } from "../../../shared/receipt.ts";
 import { addRecipients, cleanDisplayText, openSealed, seal, type Recipient, type SealedKind, type SealedView } from "../../../shared/sealed.ts";
 import {
@@ -137,6 +137,31 @@ export interface State {
 
 const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3 };
 
+/** Isi file cadangan (setelah didekripsi). */
+interface BackupData {
+  messages: Omit<LocalMessage, "key" | "owner">[];
+  pins: Record<string, PinnedKey>;
+  shipping: { name: string; address: string; contact: string } | null;
+  receipts: Record<string, number>;
+}
+
+const MSG_KINDS = new Set(["text", "ping", "identity", "locked", "broken"]);
+const MSG_STATUSES = new Set(["pending", "S", "D", "R", "failed"]);
+
+/** Validasi ketat: cadangan berasal dari luar aplikasi, jangan percaya bentuknya. */
+function isBackupMessage(m: unknown): m is Omit<LocalMessage, "key" | "owner"> {
+  const o = m as Record<string, unknown>;
+  return (
+    typeof o === "object" && o !== null &&
+    typeof o.id === "string" && o.id.length <= 64 &&
+    typeof o.peer === "string" && o.peer.length <= 64 &&
+    typeof o.mine === "boolean" &&
+    typeof o.text === "string" && o.text.length <= 20_000 &&
+    typeof o.createdAt === "number" && Number.isFinite(o.createdAt) &&
+    MSG_KINDS.has(o.kind as string) && MSG_STATUSES.has(o.status as string)
+  );
+}
+
 export class Messenger {
   private state: State;
   private listeners = new Set<() => void>();
@@ -149,9 +174,14 @@ export class Messenger {
   private toastSeq = 0;
   private rt: Realtime;
   private readonly onSignedOut: (reason: string) => void;
+  private readonly device: UnlockedDevice;
+  private readonly justSetUp: boolean;
 
-  constructor(me: Me, onSignedOut: (reason: string) => void) {
+  /** `device` = kunci dari brankas yang sudah dibuka; `justSetUp` = baru dibuat/dipulihkan di sini. */
+  constructor(me: Me, device: UnlockedDevice, justSetUp: boolean, onSignedOut: (reason: string) => void) {
     this.onSignedOut = onSignedOut;
+    this.device = device;
+    this.justSetUp = justSetUp;
     this.state = {
       me,
       device: "setting_up",
@@ -232,38 +262,106 @@ export class Messenger {
     if (document.visibilityState === "visible" && this.state.activePeer) this.markRead(this.state.activePeer);
   };
 
-  /** Siapkan kunci perangkat. Kunci privat dibuat DI SINI dan tidak pernah dikirim. */
+  /**
+   * Kunci identitas berasal dari frasa kunci (brankas sudah dibuka di device.ts). Kunci privat
+   * tidak pernah dikirim; server hanya menerima kunci publik.
+   */
   private async setupDevice() {
     const me = this.state.me;
-    let local = (await keystore.getIdentity(me.id)) ?? null;
-    if (local && me.publicKey && local.publicKey !== me.publicKey) {
-      this.identity = local;
+    this.identity = this.device;
+    if (me.publicKey === this.device.publicKey) {
+      this.set({ device: "ok" });
+      return;
+    }
+    // Kunci di server berbeda: bila perangkat ini BARU disiapkan, daftarkan kuncinya; bila tidak,
+    // berarti akun sempat diaktifkan di perangkat lain sesudahnya.
+    if (me.publicKey && !this.justSetUp) {
       this.set({ device: "other_device" });
       return;
     }
-    if (!local) {
-      local = await generateIdentity();
-      await keystore.putIdentity(me.id, local);
-      if (me.publicKey) this.toast("Perangkat baru terdaftar. Pesan lama dari perangkat sebelumnya tidak bisa dibuka di sini.", "warn");
-    }
-    this.identity = local;
-    if (me.publicKey !== local.publicKey) {
-      const { me: updated } = await api<{ me: Me }>("PUT", "/api/me/key", { publicKey: local.publicKey });
-      this.set({ me: updated });
-    }
-    this.set({ device: "ok" });
+    const { me: updated } = await api<{ me: Me }>("PUT", "/api/me/key", { publicKey: this.device.publicKey });
+    this.set({ me: updated, device: "ok" });
+    if (me.publicKey) this.toast("Perangkat ini memakai frasa kunci baru — kontakmu akan melihat safety number baru. Pesan dari kunci lama tidak bisa dibuka di sini.", "warn");
   }
 
-  /** Pakai kembali perangkat ini setelah akun sempat aktif di perangkat lain. */
+  /** Pakai kembali perangkat ini setelah akun sempat aktif di perangkat lain (kunci frasa perangkat ini). */
   async reclaimDevice() {
-    const fresh = await generateIdentity();
-    const { me } = await api<{ me: Me }>("PUT", "/api/me/key", { publicKey: fresh.publicKey });
-    await keystore.putIdentity(me.id, fresh);
-    this.identity = fresh;
+    const { me } = await api<{ me: Me }>("PUT", "/api/me/key", { publicKey: this.device.publicKey });
     this.keyCache.clear();
     this.set({ me, device: "ok", threads: {} });
     if (this.state.activePeer) await this.loadThread(this.state.activePeer);
     this.toast("Perangkat ini aktif lagi. Kontakmu akan melihat safety number baru.", "ok");
+  }
+
+  // -------------------------------------------- brankas lokal & cadangan ---
+
+  /** Alamat pengiriman yang diingat — disimpan terenkripsi di brankas perangkat. */
+  getSavedShipping() {
+    return keystore.getSecret<{ name: string; address: string; contact: string }>(this.state.me.id, "shipping").catch(() => undefined);
+  }
+
+  async setSavedShipping(v: { name: string; address: string; contact: string } | null) {
+    if (v) await keystore.putSecret(this.state.me.id, "shipping", v);
+    else await keystore.deleteSecret(this.state.me.id, "shipping");
+  }
+
+  /** Cadangan riwayat + pin + rahasia kecil, dienkripsi dengan kunci turunan frasa kunci. */
+  async exportBackup(): Promise<Blob> {
+    const owner = this.state.me.id;
+    const receipts: Record<string, number> = {};
+    for (const id of Object.keys(this.state.receipts)) {
+      const seq = await keystore.getSecret<number>(owner, `receipt:${id}`);
+      if (typeof seq === "number") receipts[id] = seq;
+    }
+    const data: BackupData = {
+      messages: (await keystore.allMessages(owner)).map(({ key: _k, owner: _o, ...m }) => m),
+      pins: await keystore.allPins(owner),
+      shipping: (await this.getSavedShipping()) ?? null,
+      receipts,
+    };
+    const file = await encryptBackup(this.device.backup, owner, data);
+    return new Blob([JSON.stringify(file)], { type: "application/json" });
+  }
+
+  /**
+   * Pulihkan cadangan. `key` = kunci cadangan dari frasa kunci lain (opsional). Gabung tanpa menimpa:
+   * pesan yang sudah ada & pin yang sudah dipercaya tetap seperti sekarang.
+   */
+  async importBackup(file: File, key?: CryptoKey): Promise<{ messages: number; createdAt: number }> {
+    if (file.size > BACKUP_MAX_BYTES) throw new ApiError(400, "too_large", "File cadangan terlalu besar");
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await file.text());
+    } catch {
+      throw new ApiError(400, "bad_backup", "Ini bukan file cadangan PINPath");
+    }
+    const owner = this.state.me.id;
+    let out: { createdAt: number; data: BackupData };
+    try {
+      out = await decryptBackup<BackupData>(key ?? this.device.backup, owner, raw);
+    } catch (e) {
+      throw new ApiError(400, (e as E2EEError).code ?? "bad_backup", (e as Error).message);
+    }
+    const { data } = out;
+    const msgs = Array.isArray(data.messages) ? data.messages.filter(isBackupMessage) : [];
+    const peers = [...new Set(msgs.map((m) => m.peer))];
+    const existing = new Set<string>();
+    for (const p of peers) for (const m of await keystore.getThread(owner, p, Infinity)) existing.add(m.id);
+    const fresh = msgs.filter((m) => !existing.has(m.id)).map((m) => ({ ...m, key: `${owner}:${m.id}`, owner }));
+    await keystore.putMessages(fresh);
+    for (const [peer, pin] of Object.entries(data.pins ?? {})) {
+      if (typeof pin?.publicKey === "string" && !(await keystore.getPin(owner, peer))) await keystore.putPin(owner, peer, { publicKey: pin.publicKey, verified: !!pin.verified, firstSeen: Number(pin.firstSeen) || Date.now() });
+    }
+    if (data.shipping && !(await this.getSavedShipping())) await this.setSavedShipping(data.shipping);
+    for (const [id, seq] of Object.entries(data.receipts ?? {})) {
+      const cur = (await keystore.getSecret<number>(owner, `receipt:${id}`)) ?? -1;
+      if (typeof seq === "number" && seq > cur) await keystore.putSecret(owner, `receipt:${id}`, seq);
+    }
+    // Muat ulang tampilan dari brankas lokal.
+    this.set({ threads: {} });
+    await this.refreshContacts();
+    if (this.state.activePeer) await this.loadThread(this.state.activePeer);
+    return { messages: fresh.length, createdAt: out.createdAt };
   }
 
   private onOnline() {
@@ -603,8 +701,9 @@ export class Messenger {
     try {
       const config = await api<PublicConfig>("GET", "/api/config");
       const embedded = (import.meta.env.VITE_NOTARY_PUBLIC_KEY as string | undefined) || null;
-      const pinned = embedded ?? (await keystore.getMeta<string>("notaryKey")) ?? null;
-      if (!pinned) await keystore.putMeta("notaryKey", config.notaryPublicKey);
+      const owner = this.state.me.id;
+      const pinned = embedded ?? (await keystore.getSecret<string>(owner, "notaryKey")) ?? null;
+      if (!pinned) await keystore.putSecret(owner, "notaryKey", config.notaryPublicKey);
       this.notaryKey = pinned ?? config.notaryPublicKey;
       const notaryAlert =
         this.notaryKey !== config.notaryPublicKey
@@ -642,12 +741,13 @@ export class Messenger {
         out[deal.id] = { state: "mismatch", seq: body.seq };
         continue;
       }
-      const seen = (await keystore.getMeta<number>(`receipt:${deal.id}`)) ?? -1;
+      const owner = this.state.me.id;
+      const seen = (await keystore.getSecret<number>(owner, `receipt:${deal.id}`)) ?? -1;
       if (body.seq < seen) {
         out[deal.id] = { state: "rollback", seq: body.seq };
         continue;
       }
-      if (body.seq > seen) await keystore.putMeta(`receipt:${deal.id}`, body.seq);
+      if (body.seq > seen) await keystore.putSecret(owner, `receipt:${deal.id}`, body.seq);
       out[deal.id] = { state: "ok", seq: body.seq };
     }
     this.set({ receipts: { ...this.state.receipts, ...out } });
