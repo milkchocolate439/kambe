@@ -47,12 +47,59 @@ kepatuhan hukum Indonesia → kenyamanan → kesederhanaan.
 
 ## 3. Apa yang diketahui server (setelah penyelarasan)
 
+### 3a. Audit enkripsi (Tahap 1 "enkripsi mutlak")
+
+Semua **isi** yang ditulis pengguna disegel di perangkat. Server hanya menyimpan ciphertext,
+tanpa kunci untuk membukanya.
+
+| Isi | Cara dilindungi | Siapa yang bisa membaca |
+|---|---|---|
+| Pesan chat & PING | E2EE X25519 → AES-256-GCM per percakapan | Kedua pihak |
+| Momen | E2EE per penerima | Kontak yang dipilih penulis |
+| Identitas pengiriman (nama/alamat) | Dikirim sebagai pesan E2EE | Penjual |
+| Status pribadi (PM) | Sealed object `pm` | Kontak dengan safety number yang dipercaya |
+| Catatan undangan | Sealed object `note` | Pemilik PIN tujuan |
+| Label Shadow PIN | Sealed object `label` | Pemilik saja |
+| Judul, deskripsi & sektor produk | Sealed object `product` | Kontak penjual |
+| Judul kesepakatan | Sealed object `deal` | Pembeli, penjual & moderator |
+| Bukti kirim (kurir/resi/catatan) | Sealed object `shipment` | Pembeli, penjual & moderator |
+| Pernyataan & alasan sengketa | Sealed object `statement` | Pembeli, penjual & moderator |
+| Alasan putusan moderator | Sealed object `resolution` | Pembeli & penjual |
+| Kuitansi notaris | Hanya memuat `contentHash` dari isi tersegel, bukan judulnya | Semua orang bisa memverifikasi; isinya tidak bocor |
+
+**Sealed object** (`shared/sealed.ts`) bekerja begini:
+
+- Isi dienkripsi sekali dengan kunci acak K (AES-256-GCM).
+- K dibungkus untuk tiap penerima memakai KEK = HKDF(X25519(kunci privat pemilik, kunci publik penerima)).
+- AAD mengikat jenis objek, id, kunci pemilik dan kunci penerima, sehingga bungkus tidak bisa dipindah ke objek lain.
+
+Aturan di server:
+
+- Server menolak isi polos (`*_must_be_encrypted`).
+- Server menolak penerima di luar yang berhak (`recipient_not_allowed`).
+- Server menolak kunci penerima yang sudah usang (`key_changed`).
+- Kontak yang safety number-nya sedang berubah tidak diberi kunci sampai ditinjau.
+- Bila moderator ganti perangkat, pihak sengketa menerima sinyal `reshare_needed`. Klien mereka lalu otomatis membungkus ulang isi untuk kunci baru moderator.
+
+**Yang sengaja TIDAK dienkripsi** (tanpa data ini server tidak bisa berfungsi):
+
+| Data | Alasan |
+|---|---|
+| Alias, PIN, kunci publik | Direktori untuk saling menemukan |
+| Siapa berteman dengan siapa, waktu & status kirim | Metadata routing relay |
+| Harga, fee, status kesepakatan, buku besar | Fee 5% & rekber ditegakkan di server; harus bisa diaudit |
+| Iklan radar (citra) | Memang publik bagi peserta radar |
+| Pilihan putusan moderator (refund/release) | Menggerakkan uang |
+
+### 3b. Ringkasan
+
 | Data | Disimpan server? |
 |---|---|
 | Isi pesan, momen, identitas pengiriman | Tidak pernah (E2EE) |
 | Ciphertext pesan | Hanya sampai terkirim (maks. 30 hari bila penerima tak pernah online) |
+| Isi lain (status, catatan, produk, judul, bukti kirim, pernyataan, putusan, label) | Hanya ciphertext (sealed object) |
 | Alias, PIN, kunci publik, kontak, blokir | Ya (direktori) |
-| Kesepakatan, buku besar, bukti kirim, pernyataan sengketa | Ya (diperlukan untuk menegakkan aturan uang & moderasi) |
+| Harga, status kesepakatan, buku besar | Ya (diperlukan untuk menegakkan aturan uang & moderasi) |
 | Nomor HP, email, KTP | Tidak pernah diminta |
 
 ## 4. Uang: notaris + gateway (Skema B yang benar)
@@ -86,5 +133,6 @@ Server ──(6) kuitansi bertanda tangan Ed25519──▶ kedua ponsel (diverif
 | Rekber, buku besar, sengketa | `server/commerce.ts` |
 | Notaris kuitansi | `server/notary.ts`, `shared/receipt.ts` |
 | Penyedia pembayaran | `server/payments.ts` |
-| Kripto bersama | `shared/e2ee.ts` |
+| Kripto bersama | `shared/e2ee.ts`, `shared/sealed.ts` |
+| Penyimpanan sealed object | `server/sealed.ts` |
 | Mesin lokal klien | `client/src/lib/messenger.ts`, `client/src/lib/localstore.ts`, `client/src/lib/keystore.ts` |

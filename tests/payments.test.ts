@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../server/app.ts";
 import { xenditProvider } from "../server/payments.ts";
-import { Client } from "./helpers.ts";
+import { addProduct, Client, createDeal } from "./helpers.ts";
 
 const key = () => crypto.randomUUID().replace(/-/g, "");
 const SECRET = "xnd_development_RAHASIA_JANGAN_BOCOR";
@@ -34,8 +34,8 @@ async function gatewayMarket() {
   await buyer.post("/api/contacts/invite", { pin: s.me.pin });
   await seller.post(`/api/contacts/requests/${(await seller.get("/api/contacts")).body.incoming[0].id}/accept`);
   await seller.post("/api/pro/subscribe", { idempotencyKey: key() });
-  const prod = (await seller.post("/api/products", { title: "Rotan 1 ton", sector: "Komoditas & Pangan", price: 4_000_000 })).body;
-  const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
+  const prod = (await addProduct(seller, { title: "Rotan 1 ton", sector: "Komoditas & Pangan", price: 4_000_000 })).body;
+  const deal = (await createDeal(buyer, prod.id, key(), seller.party, "Rotan 1 ton")).body;
   return { app, base, gw, seller, buyer, sellerId: s.me.id, deal };
 }
 

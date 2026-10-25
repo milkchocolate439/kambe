@@ -2,6 +2,25 @@
 // metadata di bawah ini — isi pesan selalu berupa ciphertext.
 
 import type { SignedReceipt } from "./receipt.ts";
+import type { Recipient, SealedView } from "./sealed.ts";
+
+// ---------------------------------------------------------------------------
+// Bentuk ISI sealed object setelah didekripsi di perangkat (server tidak pernah melihatnya).
+export interface PmContent { text: string }
+export interface NoteContent { text: string }
+export interface LabelContent { text: string }
+export interface ProductContent { title: string; description: string; sector: string }
+export interface DealContent { title: string }
+export interface ShipmentContent { courier: string; tracking: string | null; note: string }
+export interface StatementContent { reason?: DisputeReason; text: string }
+export interface ResolutionContent { reason: string }
+
+/** Kunci publik pihak-pihak sebuah kesepakatan, untuk menyegel isi terkait (bukti kirim, pernyataan, …). */
+export interface DealKeys {
+  buyer: Recipient | null;
+  seller: Recipient | null;
+  moderators: Recipient[];
+}
 
 export const ALIAS_RE = /^[A-Za-z0-9_]{3,24}$/;
 export const PASSPHRASE_MIN = 10;
@@ -18,7 +37,8 @@ export interface PublicUser {
   alias: string;
   pin: string;
   publicKey: string | null;
-  pm: string;
+  /** Status pribadi terenkripsi (PmContent); null = tidak ada / belum dibagikan ke kamu. */
+  pm: SealedView | null;
 }
 
 export interface Me extends PublicUser {
@@ -41,11 +61,12 @@ export interface Contact extends PublicUser {
 
 export interface IncomingRequest {
   id: string;
-  from: { id: string; alias: string; pin: string; pm: string };
-  note: string;
+  from: { id: string; alias: string; pin: string };
+  /** Catatan undangan terenkripsi untukmu (NoteContent). */
+  note: SealedView | null;
   createdAt: number;
   /** Undangan masuk lewat Shadow PIN / PIN sekali pakai / PIN radar (bukan PIN utama). */
-  via: { pin: string; kind: ShadowKind; label: string } | null;
+  via: { pin: string; kind: ShadowKind; label: SealedView | null } | null;
 }
 
 export type ShadowKind = "shadow" | "once" | "radar";
@@ -61,7 +82,8 @@ export const RADAR_HEADLINE_MAX = 120;
 export interface ShadowPin {
   pin: string;
   kind: ShadowKind;
-  label: string;
+  /** Label hanya untuk pemilik (LabelContent, terenkripsi). */
+  label: SealedView | null;
   createdAt: number;
   expiresAt: number;
 }
@@ -162,6 +184,8 @@ export type ServerEvent =
   | { t: "key_changed"; userId: string }
   | { t: "deals_changed"; peer: string }
   | { t: "mod_queue_changed" }
+  /** Moderator ganti kunci perangkat: pihak sengketa perlu membagikan ulang isi ke kunci barunya. */
+  | { t: "reshare_needed"; peer: string }
   | { t: "moments_changed" }
   | { t: "me_changed" }
   | { t: "products_changed"; owner: string }
@@ -201,10 +225,10 @@ export interface ProStatus {
 export interface Product {
   id: string;
   ownerId: string;
-  title: string;
-  description: string;
-  sector: string;
+  /** Harga tetap terbaca server (dasar fee & rekber yang ditegakkan server). */
   price: number;
+  /** Nama, deskripsi, sektor — terenkripsi untuk kontak (ProductContent). */
+  content: SealedView | null;
   createdAt: number;
 }
 
@@ -221,7 +245,8 @@ export interface Deal {
   sellerId: string;
   createdBy: string;
   productId: string | null;
-  title: string;
+  /** Judul kesepakatan terenkripsi untuk pembeli, penjual & moderator (DealContent). */
+  content: SealedView | null;
   price: number;
   fee: number;
   sellerNet: number;
@@ -239,12 +264,12 @@ export interface Deal {
   autoRefundAt: number | null;
   /** Aksi yang boleh dilakukan pengguna yang meminta data ini. */
   actions: DealAction[];
-  /** Bukti kirim yang wajib diisi penjual saat "kirim" (terlihat pembeli & moderator). */
-  shipment: Shipment | null;
-  disputeReason: DisputeReason | null;
-  /** Pernyataan sengketa — sengaja dikirim ke moderator, TIDAK terenkripsi end-to-end. */
+  /** Bukti kirim wajib (ShipmentContent) — terenkripsi untuk pembeli, penjual & moderator. */
+  shipment: SealedView | null;
+  /** Pernyataan sengketa (StatementContent) — terenkripsi untuk pembeli, penjual & moderator. */
   statements: DisputeStatement[];
-  resolution: { decision: "refund" | "release"; reason: string; at: number } | null;
+  /** Putusan: keputusan terbaca server (perlu untuk memindahkan dana); alasan terenkripsi. */
+  resolution: { decision: "refund" | "release"; by: "moderator" | "system"; at: number; reason: SealedView | null } | null;
   /** Kode referensi bayar sekali pakai (tanpa identitas) — dipakai di gateway & kuitansi. */
   payRef: string;
   /** Kuitansi notaris terbaru (Ed25519). Klien memverifikasi sebelum mempercayai status. */
@@ -284,16 +309,10 @@ export const DISPUTE_REASONS = {
 } as const;
 export type DisputeReason = keyof typeof DISPUTE_REASONS;
 
-export interface Shipment {
-  courier: string;
-  tracking: string | null;
-  note: string;
-}
-
 export interface DisputeStatement {
   role: "buyer" | "seller";
-  text: string;
   createdAt: number;
+  content: SealedView | null;
 }
 
 /** Tampilan antrean moderator: konteks secukupnya untuk memutus, tanpa isi chat E2EE. */

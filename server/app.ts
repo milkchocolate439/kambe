@@ -9,6 +9,7 @@ import { registerCommerce, type DealTimers } from "./commerce.ts";
 import { registerDiscovery } from "./discovery.ts";
 import { registerMoments } from "./moments.ts";
 import { createNotary } from "./notary.ts";
+import { createSealedStore } from "./sealed.ts";
 import { simulatedProvider, type PaymentProvider } from "./payments.ts";
 import type { KeyObject } from "node:crypto";
 import {
@@ -26,11 +27,9 @@ import { isValidPublicKey, NONCE_BYTES } from "../shared/e2ee.ts";
 import {
   ALIAS_RE,
   CIPHERTEXT_MAX_B64,
-  NOTE_MAX,
   PASSPHRASE_MAX,
   PASSPHRASE_MIN,
   PING_COOLDOWN_MS,
-  PM_MAX,
   UUID_RE,
   FEE_PER_MILLE,
   PIN_ROTATE_OPTIONS,
@@ -119,6 +118,21 @@ export function createApp(opts: AppOptions) {
     log(`[peringatan] PINPATH_MODERATORS: "${bad}" bukan ID akun (UUID) — diabaikan. Cari ID dengan: node --import tsx scripts/moderator-id.ts <alias>`);
   }
   const isModerator = (u: UserRow) => moderatorIdSet.has(u.id);
+
+  // Sealed object: isi terenkripsi multi-penerima. Aturan SIAPA yang boleh menerima per jenis:
+  //  pm/product → kontak pemilik · note → target undangan · label → pemilik saja ·
+  //  deal/shipment/statement/resolution → pembeli, penjual, dan moderator kesepakatan itu.
+  const sealed = createSealedStore({
+    db,
+    getUser,
+    allowed: (kind, ownerId, context) => {
+      if (kind === "pm" || kind === "product") return new Set((q.contactIds.all(ownerId) as { peer_id: string }[]).map((r) => r.peer_id));
+      if (kind === "note") return new Set(context ? [context] : []);
+      if (kind === "label") return new Set();
+      const deal = context ? (db.prepare("SELECT buyer_id, seller_id FROM deals WHERE id = ?").get(context) as { buyer_id: string; seller_id: string } | undefined) : undefined;
+      return deal ? new Set([deal.buyer_id, deal.seller_id, ...moderatorIdSet]) : new Set();
+    },
+  });
   const notary = createNotary(opts.notaryKey);
   const feePerMille = opts.feePerMille ?? FEE_PER_MILLE;
   if (!Number.isInteger(feePerMille) || feePerMille < 0 || feePerMille > 200) throw new Error("feePerMille harus bilangan bulat 0–200 (0%–20%)");
@@ -129,7 +143,7 @@ export function createApp(opts: AppOptions) {
       alias: u.alias,
       pin: u.pin,
       publicKey: u.public_key,
-      pm: u.pm,
+      pm: sealed.view(u.pm_object, u.id),
       readReceipts: u.read_receipts === 1,
       createdAt: u.created_at,
       isModerator: isModerator(u),
@@ -466,15 +480,19 @@ export function createApp(opts: AppOptions) {
     // Kontak perlu tahu agar memperingatkan "safety number berubah".
     for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "key_changed", userId: user.id });
     emit(user.id, { t: "key_changed", userId: user.id }, tokenHash);
+    if (moderatorIdSet.has(user.id)) {
+      const open = db.prepare("SELECT buyer_id, seller_id FROM deals WHERE status = 'DISPUTED'").all() as { buyer_id: string; seller_id: string }[];
+      for (const d of open) {
+        emit(d.buyer_id, { t: "reshare_needed", peer: d.seller_id });
+        emit(d.seller_id, { t: "reshare_needed", peer: d.buyer_id });
+      }
+    }
     return { me: toMe(getUser(user.id)!) };
   }));
 
   route("PATCH", "/api/me/settings", authed(async ({ req, user }) => {
     const body = await readJson(req);
-    if (body.pm !== undefined) {
-      const pm = cleanText(str(body, "pm", { max: PM_MAX * 2 })).slice(0, PM_MAX);
-      db.prepare("UPDATE users SET pm = ? WHERE id = ?").run(pm, user.id);
-    }
+    if (body.pm !== undefined) throw new HttpError(400, "pm_must_be_encrypted", "Status pribadi wajib terenkripsi (PUT /api/me/status)");
     if (body.readReceipts !== undefined) {
       if (typeof body.readReceipts !== "boolean") throw new HttpError(400, "bad_field", "readReceipts harus boolean");
       db.prepare("UPDATE users SET read_receipts = ? WHERE id = ?").run(body.readReceipts ? 1 : 0, user.id);
@@ -487,6 +505,62 @@ export function createApp(opts: AppOptions) {
     for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
     return { me: toMe(getUser(user.id)!) };
   }));
+
+  // Status pribadi (PM) = sealed object untuk kontak. Ganti = objek baru, objek lama dihapus.
+  route("PUT", "/api/me/status", authed(async ({ req, user }) => {
+    limit(`status:${user.id}`, 60, HOUR, "Status terlalu sering diubah.");
+    const raw = (await readJson(req)).sealed;
+    const id = tx(db, () => {
+      const objectId = sealed.store(raw, "pm", user);
+      sealed.remove(user.pm_object);
+      db.prepare("UPDATE users SET pm_object = ? WHERE id = ?").run(objectId, user.id);
+      return objectId;
+    });
+    for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
+    return { me: toMe(getUser(user.id)!), objectId: id };
+  }));
+
+  route("DELETE", "/api/me/status", authed(({ user }) => {
+    tx(db, () => {
+      sealed.remove(user.pm_object);
+      db.prepare("UPDATE users SET pm_object = NULL WHERE id = ?").run(user.id);
+    });
+    for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
+    return { me: toMe(getUser(user.id)!) };
+  }));
+
+  // ---- sealed object: tambah penerima (kontak baru / moderator / kunci baru) ----
+
+  route("GET", "/api/sealed/:id/recipients", authed(({ user, params }) => {
+    const v = sealed.view(params.id, user.id);
+    if (!v || v.ownerId !== user.id) throw new HttpError(404, "not_found", "Objek tidak ditemukan");
+    return { recipients: sealed.recipients(params.id) };
+  }));
+
+  route("POST", "/api/sealed/:id/wraps", authed(async ({ req, user, params }) => {
+    limit(`wraps:${user.id}`, 600, HOUR, "Terlalu banyak pembaruan kunci.");
+    const raw = (await readJson(req, 256 * 1024)).wraps;
+    const n = sealed.addWraps(params.id, user, raw);
+    // Beri tahu penerima baru agar tampilannya langsung bisa membuka isi yang baru dibagikan.
+    const m = sealed.meta(params.id);
+    const to = Array.isArray(raw) ? [...new Set(raw.map((w: { to?: unknown }) => w?.to).filter((x): x is string => typeof x === "string"))] : [];
+    for (const id of to) {
+      if (m?.kind === "pm") emit(id, { t: "contacts_changed" });
+      else if (m?.kind === "product") emit(id, { t: "products_changed", owner: user.id });
+      else if (m?.context) {
+        const deal = db.prepare("SELECT buyer_id, seller_id FROM deals WHERE id = ?").get(m.context) as { buyer_id: string; seller_id: string } | undefined;
+        if (!deal) continue;
+        if (moderatorIdSet.has(id)) emit(id, { t: "mod_queue_changed" });
+        else emit(id, { t: "deals_changed", peer: id === deal.buyer_id ? deal.seller_id : deal.buyer_id });
+      }
+    }
+    return { added: n };
+  }));
+
+  // Kunci publik moderator — agar isi kesepakatan (bukti kirim, pernyataan) bisa disegel untuk mereka.
+  route("GET", "/api/mod/keys", authed(() => ({
+    moderators: [...moderatorIdSet].map((id) => getUser(id)).filter((u): u is UserRow => !!u?.public_key).map((u) => ({ id: u.id, publicKey: u.public_key! })),
+  })));
 
   route("POST", "/api/me/pin/rotate", authed(({ user }) => {
     limit(`pin-rotate:${user.id}`, 5, 24 * HOUR, "PIN sudah terlalu sering diganti hari ini.");
@@ -519,7 +593,7 @@ export function createApp(opts: AppOptions) {
     const contacts = (
       db
         .prepare(
-          `SELECT u.id, u.alias, COALESCE(c.via_pin, u.pin) AS pin, u.public_key, u.pm, c.since,
+          `SELECT u.id, u.alias, COALESCE(c.via_pin, u.pin) AS pin, u.public_key, u.pm_object, c.since,
              (SELECT COUNT(*) FROM messages m WHERE m.sender_id = u.id AND m.recipient_id = c.user_id AND m.read_at IS NULL) AS unread,
              (SELECT MAX(m.created_at) FROM messages m
                 WHERE (m.sender_id = u.id AND m.recipient_id = c.user_id) OR (m.sender_id = c.user_id AND m.recipient_id = u.id)) AS last_at
@@ -534,7 +608,7 @@ export function createApp(opts: AppOptions) {
         alias: r.alias as string,
         pin: r.pin as string,
         publicKey: r.public_key as string | null,
-        pm: r.pm as string,
+        pm: sealed.view(r.pm_object as string | null, userId),
         since: r.since as number,
         unread: r.unread as number,
         lastMessageAt: (r.last_at as number | null) ?? null,
@@ -543,7 +617,7 @@ export function createApp(opts: AppOptions) {
     const incoming = (
       db
         .prepare(
-          `SELECT r.id, r.note, r.created_at, r.via_pin, COALESCE(r.via_kind, s.kind) AS via_kind, s.label AS via_label, u.id AS uid, u.alias, u.pin, u.pm
+          `SELECT r.id, r.note_object, r.created_at, r.via_pin, COALESCE(r.via_kind, s.kind) AS via_kind, s.label_object, u.id AS uid, u.alias, u.pin
            FROM contact_requests r JOIN users u ON u.id = r.from_id
            LEFT JOIN shadow_pins s ON s.pin = r.via_pin
            WHERE r.to_id = ? ORDER BY r.created_at DESC`,
@@ -551,11 +625,12 @@ export function createApp(opts: AppOptions) {
         .all(userId) as Row[]
     ).map((r) => ({
       id: r.id as string,
-      from: { id: r.uid as string, alias: r.alias as string, pin: r.pin as string, pm: r.pm as string },
-      note: r.note as string,
+      // Pengundang = orang asing: status pribadinya tidak ditampilkan (terenkripsi hanya untuk kontaknya).
+      from: { id: r.uid as string, alias: r.alias as string, pin: r.pin as string },
+      note: sealed.view(r.note_object as string | null, userId),
       createdAt: r.created_at as number,
       via: r.via_pin
-        ? { pin: r.via_pin as string, kind: ((r.via_kind as string | null) ?? "shadow") as ShadowKind, label: (r.via_label as string | null) ?? "" }
+        ? { pin: r.via_pin as string, kind: ((r.via_kind as string | null) ?? "shadow") as ShadowKind, label: sealed.view(r.label_object as string | null, userId) }
         : null,
     }));
     // Pengundang hanya melihat PIN yang ia ketik — PIN utama target tidak pernah bocor lewat shadow/radar.
@@ -581,19 +656,20 @@ export function createApp(opts: AppOptions) {
 
   route("GET", "/api/contacts", authed(({ user }) => contactsFor(user.id)));
 
-  route("POST", "/api/contacts/invite", authed(async ({ req, user }) => {
-    const body = await readJson(req);
-    const pin = normalizePin(str(body, "pin", { min: 1, max: 16 }));
-    const note = cleanText(str(body, "note", { max: NOTE_MAX * 2, optional: true })).slice(0, NOTE_MAX);
+  /**
+   * Pemeriksaan bersama untuk undangan & pengambilan kunci penerima (lookup): validasi PIN, rate limit
+   * pemindaian, PIN sendiri, dan anti-oracle PIN utama. Satu penghitung limit untuk keduanya.
+   */
+  function findInviteTarget(user: UserRow, rawPin: unknown) {
+    if (typeof rawPin !== "string" || rawPin.length > 16) throw new HttpError(400, "bad_pin", "Format PIN tidak valid");
+    const pin = normalizePin(rawPin);
     if (!isValidPin(pin)) throw new HttpError(400, "bad_pin", "Format PIN tidak valid");
     // Batas ketat pencarian PIN = pertahanan utama terhadap pemindaian massal.
     limit(`pin-lookup:${user.id}`, 30, HOUR, "Terlalu banyak pencarian PIN. Coba lagi dalam satu jam.");
     const found = resolvePin(pin);
     if (!found) throw new HttpError(404, "pin_not_found", "PIN tidak ditemukan atau sudah kedaluwarsa. Periksa lagi ketikannya.");
-    const target = found.user;
-    const viaPin = found.via?.pin ?? null;
-    if (target.id === user.id) throw new HttpError(400, "self_invite", "Itu PIN kamu sendiri");
-    const existingContact = db.prepare("SELECT via_pin FROM contacts WHERE user_id = ? AND peer_id = ?").get(user.id, target.id) as
+    if (found.user.id === user.id) throw new HttpError(400, "self_invite", "Itu PIN kamu sendiri");
+    const existingContact = db.prepare("SELECT via_pin FROM contacts WHERE user_id = ? AND peer_id = ?").get(user.id, found.user.id) as
       | { via_pin: string | null }
       | undefined;
     if (existingContact) {
@@ -604,6 +680,24 @@ export function createApp(opts: AppOptions) {
       }
       throw new HttpError(409, "already_contacts", "Kalian sudah terhubung");
     }
+    return { pin, found };
+  }
+
+  // Kunci publik penerima untuk MENYEGEL catatan undangan sebelum dikirim (catatan kini E2EE).
+  // Kunci publik bukan rahasia; tidak membakar PIN sekali pakai.
+  route("POST", "/api/contacts/lookup", authed(async ({ req, user }) => {
+    const { found } = findInviteTarget(user, (await readJson(req)).pin);
+    return { publicKey: found.user.public_key };
+  }));
+
+  route("POST", "/api/contacts/invite", authed(async ({ req, user }) => {
+    const body = await readJson(req);
+    if (typeof body.note === "string" && body.note.trim()) {
+      throw new HttpError(400, "note_must_be_encrypted", "Catatan undangan wajib terenkripsi (perbarui aplikasi)");
+    }
+    const { found } = findInviteTarget(user, body.pin);
+    const target = found.user;
+    const viaPin = found.via?.pin ?? null;
 
     // PIN sekali pakai hangus pada pemakaian pertama yang "berhasil" (termasuk jalur pura-pura blokir,
     // supaya PIN itu tidak bisa dipakai untuk menguji apakah seseorang memblokir kita).
@@ -635,15 +729,24 @@ export function createApp(opts: AppOptions) {
 
     const existing = db.prepare("SELECT 1 FROM contact_requests WHERE from_id = ? AND to_id = ?").get(user.id, target.id);
     if (!existing) {
-      db.prepare("INSERT INTO contact_requests (id, from_id, to_id, note, created_at, via_pin, via_kind) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
-        randomUUID(),
-        user.id,
-        target.id,
-        note,
-        Date.now(),
-        viaPin,
-        found.via?.kind ?? null,
-      );
+      tx(db, () => {
+        // Catatan undangan: sealed object untuk target saja (server tidak bisa membacanya).
+        // Pengundang tidak tahu ID internal target (sengaja tak dibocorkan lookup), jadi bungkusnya
+        // ditujukan ke penanda "target" dan di sini dipetakan ke ID sebenarnya. Aman: ID tidak ikut AAD,
+        // yang diikat kriptografi adalah kunci publik target.
+        const rawNote = body.sealedNote as { wraps?: { to?: unknown }[] } | undefined;
+        if (rawNote && Array.isArray(rawNote.wraps)) for (const w of rawNote.wraps) if (w && w.to === "target") w.to = target.id;
+        const noteObject = rawNote ? sealed.store(rawNote, "note", user, target.id) : null;
+        db.prepare("INSERT INTO contact_requests (id, from_id, to_id, note, created_at, via_pin, via_kind, note_object) VALUES (?, ?, ?, '', ?, ?, ?, ?)").run(
+          randomUUID(),
+          user.id,
+          target.id,
+          Date.now(),
+          viaPin,
+          found.via?.kind ?? null,
+          noteObject,
+        );
+      });
       emit(target.id, { t: "contacts_changed" });
     }
     burnOnce();
@@ -761,11 +864,12 @@ export function createApp(opts: AppOptions) {
     payments: opts.payments ?? simulatedProvider,
     readRaw,
     log,
+    sealed,
   });
 
   // ---- Fase 3: Shadow PIN & radar ekonomi (opt-in) ----
 
-  const discovery = registerDiscovery({ db, route, authed, readJson, str, cleanText, limit, uniquePin });
+  const discovery = registerDiscovery({ db, route, authed, readJson, str, cleanText, limit, uniquePin, sealed });
 
   /**
    * PIN dinamis: ganti PIN utama pengguna yang mengaktifkan rotasi otomatis. Kontak yang sudah
@@ -1063,6 +1167,8 @@ export function createApp(opts: AppOptions) {
     db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(Date.now());
     // Relay, bukan arsip: ciphertext yang tak pernah diambil & metadata status dihapus setelah 30 hari.
     db.prepare("DELETE FROM messages WHERE created_at <= ?").run(Date.now() - MESSAGE_RETENTION_MS);
+    // Catatan undangan terenkripsi yang undangannya sudah diterima/ditolak/dibatalkan → hapus.
+    db.prepare("DELETE FROM sealed_objects WHERE kind = 'note' AND id NOT IN (SELECT note_object FROM contact_requests WHERE note_object IS NOT NULL)").run();
     discovery.sweep();
     moments.sweep();
     runPinRotation();

@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { normalizePin, pinProblem } from "../../../shared/pin.ts";
-import { NOTE_MAX } from "../../../shared/protocol.ts";
+import { NOTE_MAX, type LabelContent, type NoteContent, type PmContent } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
-import { Avatar, copyText, Modal, timeOf, useMessenger } from "./common.tsx";
+import { Avatar, copyText, Modal, SealedText, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 import { RadarCard, ShadowPinModal } from "./Discovery.tsx";
 
@@ -55,7 +55,9 @@ function MyPinCard() {
         <Avatar id={s.me.id} name={s.me.alias} size={46} />
         <div className="grow">
           <div className="name truncate" style={{ fontWeight: 800 }}>{s.me.alias}</div>
-          <div className="small muted truncate">{s.me.pm || "Belum ada status"}</div>
+          <div className="small muted truncate">
+            <SealedText<PmContent> view={s.me.pm} field="text" empty="Belum ada status" />
+          </div>
         </div>
       </div>
       <div className="divider" style={{ margin: "12px 0" }} />
@@ -163,7 +165,7 @@ function InviteCard() {
           aria-label="Catatan undangan"
         />
         <span className="hint">
-          <Icon name="alert" size={12} /> Catatan undangan <strong>tidak terenkripsi</strong> — jangan tulis data pribadi.
+          <Icon name="lock" size={12} /> Catatan <strong>terenkripsi end-to-end</strong> — hanya pemilik PIN yang bisa membacanya.
         </span>
         {error && <span className="error" role="alert">{error}</span>}
       </form>
@@ -205,18 +207,24 @@ function Requests() {
                       <strong className="truncate">{r.from.alias}</strong>
                       <span className="badge pin">{r.from.pin}</span>
                     </div>
-                    {r.from.pm && <div className="tiny muted truncate">{r.from.pm}</div>}
                   </div>
                 </div>
                 {r.via && (
                   <div className="tiny" style={{ color: "var(--amber)" }}>
                     <Icon name={r.via.kind === "radar" ? "store" : "clock"} size={12} /> Lewat {r.via.kind === "radar" ? "radar" : r.via.kind === "once" ? "PIN sekali pakai" : "Shadow PIN"} {r.via.pin}
-                    {r.via.label && r.via.kind === "shadow" ? ` (${r.via.label})` : ""} — dia tidak melihat PIN utamamu
+                    {r.via.label && (
+                      <>
+                        {" ("}
+                        <SealedText<LabelContent> view={r.via.label} field="text" locked="label terenkripsi" />
+                        {")"}
+                      </>
+                    )}{" "}
+                    — dia tidak melihat PIN utamamu
                   </div>
                 )}
                 {r.note && (
                   <div className="small" style={{ color: "var(--text-2)" }}>
-                    “{r.note}”
+                    <Icon name="lock" size={12} /> “<SealedText<NoteContent> view={r.note} field="text" max={120} locked="catatan tidak bisa dibuka" />”
                   </div>
                 )}
                 <div className="tiny muted">Orang asing? Jangan terima kalau tidak yakin. Kamu bisa memblokirnya.</div>
@@ -289,7 +297,9 @@ function Contacts() {
                       <Icon name="shieldCheck" size={14} style={{ color: "var(--ok)" }} aria-label="Terverifikasi" />
                     ) : null}
                   </div>
-                  <div className="tiny muted truncate">{c.pm || `PIN ${c.pin}`}</div>
+                  <div className="tiny muted truncate">
+                    <SealedText<PmContent> view={c.pm} field="text" empty={`PIN ${c.pin}`} locked={`PIN ${c.pin}`} max={80} />
+                  </div>
                 </div>
                 <div className="stack" style={{ gap: 4, alignItems: "flex-end" }}>
                   {c.lastMessageAt && <span className="tiny muted">{timeOf(c.lastMessageAt)}</span>}

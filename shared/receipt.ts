@@ -18,7 +18,8 @@ export interface ReceiptBody {
   status: DealStatus;
   buyerId: string;
   sellerId: string;
-  title: string;
+  /** Sidik isi terenkripsi kesepakatan (judul) — mengikat kuitansi ke isi tanpa membukanya. */
+  contentHash: string;
   price: number;
   fee: number;
   sellerNet: number;

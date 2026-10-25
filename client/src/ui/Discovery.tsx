@@ -1,8 +1,8 @@
 // Fase 3 — Shadow PIN & radar ekonomi (opt-in).
 import { useEffect, useState } from "react";
-import { MAX_ACTIVE_ONCE, MAX_ACTIVE_SHADOW, RADAR_HEADLINE_MAX, SECTORS } from "../../../shared/protocol.ts";
+import { MAX_ACTIVE_ONCE, MAX_ACTIVE_SHADOW, RADAR_HEADLINE_MAX, SECTORS, type LabelContent } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
-import { copyText, Modal, timeOf, useMessenger } from "./common.tsx";
+import { copyText, Modal, SealedText, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 
 function remaining(ts: number) {
@@ -62,7 +62,11 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
                 <div className="grow">
                   <div className="row" style={{ gap: 6 }}>
                     {p.kind === "once" && <span className="badge warn">SEKALI PAKAI</span>}
-                    {p.label && <span className="small truncate" style={{ fontWeight: 700 }}>{p.label}</span>}
+                    {p.label && (
+                      <span className="small truncate" style={{ fontWeight: 700 }}>
+                        <SealedText<LabelContent> view={p.label} field="text" max={40} />
+                      </span>
+                    )}
                   </div>
                   <div className="tiny muted">Mati {remaining(p.expiresAt)} ({timeOf(p.expiresAt)}){p.kind === "once" ? " atau setelah dipakai sekali" : ""}</div>
                 </div>

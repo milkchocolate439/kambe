@@ -14,16 +14,22 @@ async function pair() {
 
 test("Shadow PIN: orang asing terhubung TANPA pernah melihat PIN utama", async () => {
   const { app, owner, stranger, o } = await pair();
-  const shadow = (await owner.post("/api/shadow-pins", { label: "Pasar Sabtu" })).body;
+  assert.equal((await owner.post("/api/shadow-pins", { label: "Pasar Sabtu" })).body.error, "label_must_be_encrypted");
+  // Label hanya untuk pemilik → disegel untuk diri sendiri saja.
+  const shadow = (await owner.post("/api/shadow-pins", { sealedLabel: await owner.seal("label", { text: "Pasar Sabtu" }) })).body;
+  assert.deepEqual(await owner.open(shadow.label), { text: "Pasar Sabtu" });
+  assert.ok(!JSON.stringify(app.db.prepare("SELECT * FROM shadow_pins").all()).includes("Pasar"), "label tidak tersimpan sebagai teks");
   assert.match(shadow.pin, /^[2-9A-HJ-NP-Z]{6}$/);
   assert.notEqual(shadow.pin, o.pin);
   assert.ok(shadow.expiresAt - shadow.createdAt === 24 * 3600_000);
 
-  assert.equal((await stranger.post("/api/contacts/invite", { pin: shadow.pin, note: "Mau beli rotan" })).body.status, "pending");
+  assert.equal((await stranger.post("/api/contacts/invite", { pin: shadow.pin })).body.status, "pending");
   const out = (await stranger.get("/api/contacts")).body;
   assert.equal(out.outgoing[0].pin, shadow.pin, "pengundang melihat PIN yang ia ketik");
   const inc = (await owner.get("/api/contacts")).body.incoming[0];
-  assert.deepEqual(inc.via, { pin: shadow.pin, kind: "shadow", label: "Pasar Sabtu" });
+  assert.equal(inc.via.pin, shadow.pin);
+  assert.equal(inc.via.kind, "shadow");
+  assert.deepEqual(await owner.open(inc.via.label), { text: "Pasar Sabtu" }, "pemilik melihat labelnya (terdekripsi di perangkat)");
 
   await owner.post(`/api/contacts/requests/${inc.id}/accept`);
   const after = (await stranger.get("/api/contacts")).body;
@@ -70,7 +76,7 @@ test("regresi audit Fase 3 #3: kontak via Shadow PIN tidak bisa memastikan tebak
 
 test("PIN dinamis: PIN sekali pakai hangus setelah satu undangan", async () => {
   const { app, base, owner, stranger, o } = await pair();
-  const once = (await owner.post("/api/shadow-pins", { once: true, label: "Pembeli COD" })).body;
+  const once = (await owner.post("/api/shadow-pins", { once: true, sealedLabel: await owner.seal("label", { text: "Pembeli COD" }) })).body;
   assert.equal(once.kind, "once");
   assert.equal((await stranger.post("/api/contacts/invite", { pin: once.pin })).body.status, "pending");
   const inc = (await owner.get("/api/contacts")).body.incoming[0];

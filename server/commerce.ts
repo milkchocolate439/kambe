@@ -7,6 +7,9 @@
 //  - Pembuatan kesepakatan & langganan idempoten lewat idempotencyKey.
 //  - Setiap posting buku besar dijumlah = 0; saldo escrow selalu = total dana yang ditahan.
 //  - Data identitas asli TIDAK pernah lewat sini — dibagikan sebagai pesan E2EE di chat.
+//  - SEMUA isi (nama/deskripsi/sektor produk, judul kesepakatan, bukti kirim, pernyataan sengketa,
+//    alasan putusan) adalah sealed object terenkripsi. Server hanya tahu nominal (wajib untuk fee &
+//    rekber), status, pihak, dan waktu.
 
 import type { IncomingMessage } from "node:http";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -15,16 +18,10 @@ import type { PaymentProvider } from "./payments.ts";
 import { RECEIPT_KIND, type ReceiptBody, type SignedReceipt } from "../shared/receipt.ts";
 import { tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Handler, type Row, type UserRow } from "./http.ts";
+import type { SealedStore } from "./sealed.ts";
 import {
-  COURIERS,
-  DISPUTE_REASONS,
-  NO_TRACKING_COURIERS,
-  RESOLUTION_REASON_MIN,
-  SHIP_NOTE_MAX,
-  STATEMENT_MAX,
   STATEMENTS_PER_PARTY,
-  TRACKING_RE,
-  type DisputeReason,
+  type DealKeys,
   type ModDispute,
   type PublicConfig,
   MAX_PRODUCTS,
@@ -32,9 +29,6 @@ import {
   PRICE_MIN,
   PRO_PERIOD_MS,
   PRO_PRICE,
-  PRODUCT_DESC_MAX,
-  PRODUCT_TITLE_MAX,
-  SECTORS,
   platformFee,
   type Deal,
   type DealAction,
@@ -49,7 +43,7 @@ export interface CommerceDeps {
   db: DB;
   route: (method: string, path: string, handler: Handler) => void;
   authed: (h: AuthHandler) => Handler;
-  readJson: (req: IncomingMessage) => Promise<Row>;
+  readJson: (req: IncomingMessage, maxBytes?: number) => Promise<Row>;
   str: (body: Row, key: string, opts?: { min?: number; max?: number; optional?: boolean }) => string;
   cleanText: (s: string) => string;
   emit: (userId: string, ev: ServerEvent) => void;
@@ -66,6 +60,7 @@ export interface CommerceDeps {
   payments: PaymentProvider;
   readRaw: (req: IncomingMessage, maxBytes?: number) => Promise<string>;
   log: (msg: string) => void;
+  sealed: SealedStore;
 }
 
 /**
@@ -117,7 +112,7 @@ const TRANSITIONS: Record<Actor, Table> = {
 };
 
 /** Kolom tambahan yang boleh ditulis bersama transisi (daftar putih — tidak ada nama kolom dari input). */
-const EXTRA_COLUMNS = ["courier", "tracking", "ship_note", "dispute_reason", "resolution", "resolution_reason", "resolved_by"] as const;
+const EXTRA_COLUMNS = ["resolution", "resolved_by", "shipment_object", "resolution_object"] as const;
 type Extra = Partial<Record<(typeof EXTRA_COLUMNS)[number], string | null>>;
 
 export function registerCommerce(d: CommerceDeps) {
@@ -146,10 +141,11 @@ export function registerCommerce(d: CommerceDeps) {
     return p;
   }
 
-  function title(body: Row): string {
-    const t = d.cleanText(d.str(body, "title", { min: 1, max: PRODUCT_TITLE_MAX * 2 })).slice(0, PRODUCT_TITLE_MAX);
-    if (t.length < 3) throw new HttpError(400, "bad_title", "Nama minimal 3 karakter");
-    return t;
+  /** Isi teks harus terenkripsi: tolak klien lama yang masih mengirim teks biasa. */
+  function rejectPlaintext(body: Row, ...keys: string[]) {
+    for (const k of keys) {
+      if (body[k] !== undefined && body[k] !== null && body[k] !== "") throw new HttpError(400, "content_must_be_encrypted", `Kolom ${k} wajib dikirim terenkripsi (perbarui aplikasi)`);
+    }
   }
 
   /** Posting buku besar; menolak keras bila tidak seimbang (bug = berhenti, bukan uang hilang). */
@@ -160,14 +156,12 @@ export function registerCommerce(d: CommerceDeps) {
     for (const [account, amount] of entries) ins.run(ref, account, amount, kind, dealId, now);
   }
 
-  function toProduct(r: Row): Product {
+  function toProduct(r: Row, viewer: string): Product {
     return {
       id: r.id as string,
       ownerId: r.owner_id as string,
-      title: r.title as string,
-      description: r.description as string,
-      sector: r.sector as string,
       price: r.price as number,
+      content: d.sealed.view(r.content_object as string | null, viewer),
       createdAt: r.created_at as number,
     };
   }
@@ -188,8 +182,8 @@ export function registerCommerce(d: CommerceDeps) {
     const status = r.status as DealStatus;
     const role: Actor = asModerator ? "moderator" : r.buyer_id === viewer ? "buyer" : "seller";
     const statements = (
-      db.prepare("SELECT role, text, created_at FROM deal_statements WHERE deal_id = ? ORDER BY created_at ASC, id ASC").all(r.id as string) as Row[]
-    ).map((s) => ({ role: s.role as "buyer" | "seller", text: s.text as string, createdAt: s.created_at as number }));
+      db.prepare("SELECT role, object_id, created_at FROM deal_statements WHERE deal_id = ? ORDER BY created_at ASC, id ASC").all(r.id as string) as Row[]
+    ).map((s) => ({ role: s.role as "buyer" | "seller", createdAt: s.created_at as number, content: d.sealed.view(s.object_id as string | null, viewer) }));
     const shippedAt = (r.shipped_at as number | null) ?? null;
     const paidAt = (r.paid_at as number | null) ?? null;
     const disputedAt = (r.disputed_at as number | null) ?? null;
@@ -199,7 +193,7 @@ export function registerCommerce(d: CommerceDeps) {
       sellerId: r.seller_id as string,
       createdBy: r.created_by as string,
       productId: (r.product_id as string | null) ?? null,
-      title: r.title as string,
+      content: d.sealed.view(r.content_object as string | null, viewer),
       price: r.price as number,
       fee: r.fee as number,
       sellerNet: (r.price as number) - (r.fee as number),
@@ -214,11 +208,15 @@ export function registerCommerce(d: CommerceDeps) {
       autoRefundAt:
         status === "HELD" && paidAt ? paidAt + t.heldRefundMs : status === "DISPUTED" && disputedAt ? disputedAt + t.disputeTimeoutMs : null,
       actions: availableActions(role, r, now),
-      shipment: r.courier ? { courier: r.courier as string, tracking: (r.tracking as string | null) ?? null, note: (r.ship_note as string | null) ?? "" } : null,
-      disputeReason: (r.dispute_reason as DisputeReason | null) ?? null,
+      shipment: d.sealed.view(r.shipment_object as string | null, viewer),
       statements,
       resolution: r.resolution
-        ? { decision: r.resolution as "refund" | "release", reason: (r.resolution_reason as string) ?? "", at: (r.closed_at as number) ?? (r.updated_at as number) }
+        ? {
+            decision: r.resolution as "refund" | "release",
+            by: r.resolved_by === "system" ? "system" : "moderator",
+            at: (r.closed_at as number) ?? (r.updated_at as number),
+            reason: d.sealed.view(r.resolution_object as string | null, viewer),
+          }
         : null,
       payRef: (r.pay_ref as string | null) ?? "",
       paymentUrl: status === "AWAITING_PAYMENT" ? ((r.payment_url as string | null) ?? null) : null,
@@ -265,7 +263,7 @@ export function registerCommerce(d: CommerceDeps) {
       status: r.status as DealStatus,
       buyerId: r.buyer_id as string,
       sellerId: r.seller_id as string,
-      title: r.title as string,
+      contentHash: r.content_object ? (d.sealed.hashOf(r.content_object as string) ?? "") : "",
       price: r.price as number,
       fee: r.fee as number,
       sellerNet: (r.price as number) - (r.fee as number),
@@ -370,7 +368,7 @@ export function registerCommerce(d: CommerceDeps) {
 
   route("GET", "/api/products/mine", authed(({ user }) => ({
     pro: proStatus(user),
-    products: (db.prepare("SELECT * FROM products WHERE owner_id = ? AND active = 1 ORDER BY created_at DESC").all(user.id) as Row[]).map(toProduct),
+    products: (db.prepare("SELECT * FROM products WHERE owner_id = ? AND active = 1 ORDER BY created_at DESC").all(user.id) as Row[]).map((r) => toProduct(r, user.id)),
   })));
 
   route("GET", "/api/users/:id/products", authed(({ user, params }) => {
@@ -379,25 +377,34 @@ export function registerCommerce(d: CommerceDeps) {
     if (!owner || (owner.id !== user.id && !d.areContacts(user.id, owner.id))) throw new HttpError(404, "not_found", "Etalase tidak ditemukan");
     if (!isPro(owner)) return { pro: false, products: [] };
     const rows = db.prepare("SELECT * FROM products WHERE owner_id = ? AND active = 1 ORDER BY created_at DESC").all(owner.id) as Row[];
-    return { pro: true, products: rows.map(toProduct) };
+    return { pro: true, products: rows.map((r) => toProduct(r, user.id)) };
   }));
 
+  // Produk: harga terbaca (fee & rekber ditegakkan server); nama/deskripsi/sektor = sealed object
+  // untuk kontak penjual. Validasi panjang teks & sektor dilakukan di perangkat sebelum disegel.
   route("POST", "/api/products", authed(async ({ req, user }) => {
     requirePro(user);
     d.limit(`product-write:${user.id}`, 60, HOUR, "Terlalu banyak perubahan etalase dalam satu jam.");
-    const body = await d.readJson(req);
-    const sector = d.str(body, "sector", { min: 1, max: 40 });
-    if (!(SECTORS as readonly string[]).includes(sector)) throw new HttpError(400, "bad_sector", "Sektor tidak dikenal");
-    const description = d.cleanText(d.str(body, "description", { max: PRODUCT_DESC_MAX * 2, optional: true })).slice(0, PRODUCT_DESC_MAX);
-    const t = title(body);
+    const body = await d.readJson(req, 256 * 1024);
+    rejectPlaintext(body, "title", "description", "sector");
     const p = price(body);
     const count = db.prepare("SELECT COUNT(*) AS n FROM products WHERE owner_id = ? AND active = 1").get(user.id) as { n: number };
     if (count.n >= MAX_PRODUCTS) throw new HttpError(409, "too_many_products", `Maksimal ${MAX_PRODUCTS} produk aktif`);
     const id = randomUUID();
     const now = Date.now();
-    db.prepare("INSERT INTO products (id, owner_id, title, description, sector, price, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, user.id, t, description, sector, p, now, now);
+    tx(db, () => {
+      const contentId = d.sealed.store(body.sealed, "product", user);
+      db.prepare("INSERT INTO products (id, owner_id, title, description, sector, price, created_at, updated_at, content_object) VALUES (?, ?, '', '', '', ?, ?, ?, ?)").run(
+        id,
+        user.id,
+        p,
+        now,
+        now,
+        contentId,
+      );
+    });
     notifyContactsProducts(user.id);
-    return toProduct(db.prepare("SELECT * FROM products WHERE id = ?").get(id) as Row);
+    return toProduct(db.prepare("SELECT * FROM products WHERE id = ?").get(id) as Row, user.id);
   }));
 
   route("PATCH", "/api/products/:id", authed(async ({ req, user, params }) => {
@@ -405,37 +412,40 @@ export function registerCommerce(d: CommerceDeps) {
     d.limit(`product-write:${user.id}`, 60, HOUR, "Terlalu banyak perubahan etalase dalam satu jam.");
     const row = db.prepare("SELECT * FROM products WHERE id = ? AND owner_id = ? AND active = 1").get(params.id, user.id) as Row | undefined;
     if (!row) throw new HttpError(404, "not_found", "Produk tidak ditemukan");
-    const body = await d.readJson(req);
-    const next = {
-      title: body.title !== undefined ? title(body) : (row.title as string),
-      description: body.description !== undefined ? d.cleanText(d.str(body, "description", { max: PRODUCT_DESC_MAX * 2 })).slice(0, PRODUCT_DESC_MAX) : (row.description as string),
-      sector: row.sector as string,
-      price: body.price !== undefined ? price(body) : (row.price as number),
-    };
-    if (body.sector !== undefined) {
-      const s = d.str(body, "sector", { min: 1, max: 40 });
-      if (!(SECTORS as readonly string[]).includes(s)) throw new HttpError(400, "bad_sector", "Sektor tidak dikenal");
-      next.sector = s;
-    }
-    // Kesepakatan yang sudah dibuat memakai harga snapshot — ubah harga tidak memengaruhinya.
-    db.prepare("UPDATE products SET title = ?, description = ?, sector = ?, price = ?, updated_at = ? WHERE id = ?").run(next.title, next.description, next.sector, next.price, Date.now(), params.id);
+    const body = await d.readJson(req, 256 * 1024);
+    rejectPlaintext(body, "title", "description", "sector");
+    const nextPrice = body.price !== undefined ? price(body) : (row.price as number);
+    // Kesepakatan yang sudah dibuat memakai harga & judul snapshot — perubahan produk tidak memengaruhinya.
+    tx(db, () => {
+      let contentId = row.content_object as string | null;
+      if (body.sealed !== undefined) {
+        contentId = d.sealed.store(body.sealed, "product", user);
+        d.sealed.remove(row.content_object as string | null);
+      }
+      db.prepare("UPDATE products SET price = ?, content_object = ?, updated_at = ? WHERE id = ?").run(nextPrice, contentId, Date.now(), params.id);
+    });
     notifyContactsProducts(user.id);
-    return toProduct(db.prepare("SELECT * FROM products WHERE id = ?").get(params.id) as Row);
+    return toProduct(db.prepare("SELECT * FROM products WHERE id = ?").get(params.id) as Row, user.id);
   }));
 
   route("DELETE", "/api/products/:id", authed(({ user, params }) => {
-    const { changes } = db.prepare("UPDATE products SET active = 0, updated_at = ? WHERE id = ? AND owner_id = ? AND active = 1").run(Date.now(), params.id, user.id);
-    if (Number(changes) === 0) throw new HttpError(404, "not_found", "Produk tidak ditemukan");
+    const row = db.prepare("SELECT content_object FROM products WHERE id = ? AND owner_id = ? AND active = 1").get(params.id, user.id) as { content_object: string | null } | undefined;
+    if (!row) throw new HttpError(404, "not_found", "Produk tidak ditemukan");
+    tx(db, () => {
+      db.prepare("UPDATE products SET active = 0, content_object = NULL, updated_at = ? WHERE id = ?").run(Date.now(), params.id);
+      d.sealed.remove(row.content_object);
+    });
     notifyContactsProducts(user.id);
     return { ok: true };
   }));
 
   // ------------------------------------------------------ kesepakatan ---
 
-  function insertDeal(fields: { buyer: string; seller: string; createdBy: string; productId: string | null; title: string; price: number; key: string }) {
+  function insertDeal(fields: { buyer: string; seller: string; creator: UserRow; productId: string | null; price: number; key: string; content: unknown }) {
     const now = Date.now();
+    const createdBy = fields.creator.id;
     return tx(db, () => {
-      const existing = db.prepare("SELECT * FROM deals WHERE created_by = ? AND idem_key = ?").get(fields.createdBy, fields.key) as Row | undefined;
+      const existing = db.prepare("SELECT * FROM deals WHERE created_by = ? AND idem_key = ?").get(createdBy, fields.key) as Row | undefined;
       if (existing) {
         // Kunci yang sama hanya sah untuk permintaan yang SAMA; dipakai untuk hal lain → tolak,
         // jangan diam-diam mengembalikan kesepakatan lama (temuan red-team F2).
@@ -443,25 +453,45 @@ export function registerCommerce(d: CommerceDeps) {
           existing.buyer_id === fields.buyer &&
           existing.seller_id === fields.seller &&
           (existing.product_id ?? null) === fields.productId &&
-          (fields.productId !== null || (existing.title === fields.title && existing.price === fields.price));
+          (fields.productId !== null || existing.price === fields.price);
         if (!same) throw new HttpError(409, "idem_conflict", "Kunci permintaan sudah dipakai untuk kesepakatan lain. Muat ulang lalu coba lagi.");
         return { row: existing, created: false };
       }
-      const open = db.prepare("SELECT COUNT(*) AS n FROM deals WHERE (buyer_id = ? OR seller_id = ?) AND status = 'AWAITING_PAYMENT'").get(fields.createdBy, fields.createdBy) as { n: number };
+      const open = db.prepare("SELECT COUNT(*) AS n FROM deals WHERE (buyer_id = ? OR seller_id = ?) AND status = 'AWAITING_PAYMENT'").get(createdBy, createdBy) as { n: number };
       if (open.n >= 30) throw new HttpError(429, "too_many_open", "Terlalu banyak kesepakatan menunggu pembayaran. Selesaikan/batalkan sebagian dulu.");
       const id = randomUUID();
       db.prepare(
         `INSERT INTO deals (id, buyer_id, seller_id, created_by, product_id, title, price, fee, status, idem_key, created_at, updated_at, pay_ref)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'AWAITING_PAYMENT', ?, ?, ?, ?)`,
-      ).run(id, fields.buyer, fields.seller, fields.createdBy, fields.productId, fields.title, fields.price, platformFee(fields.price, d.feePerMille), fields.key, now, now, newPayRef());
-      issueReceipt(id, now); // kuitansi #0: kesepakatan dibuat
+         VALUES (?, ?, ?, ?, ?, '', ?, ?, 'AWAITING_PAYMENT', ?, ?, ?, ?)`,
+      ).run(id, fields.buyer, fields.seller, createdBy, fields.productId, fields.price, platformFee(fields.price, d.feePerMille), fields.key, now, now, newPayRef());
+      // Judul kesepakatan: sealed object untuk pembeli, penjual & moderator (konteks = kesepakatan ini).
+      const contentId = d.sealed.store(fields.content, "deal", fields.creator, id);
+      db.prepare("UPDATE deals SET content_object = ? WHERE id = ?").run(contentId, id);
+      issueReceipt(id, now); // kuitansi #0: kesepakatan dibuat (mengikat sidik isi terenkripsi)
       return { row: getDeal(id)!, created: true };
     });
   }
 
+  // Kunci publik pihak-pihak kesepakatan → untuk menyegel bukti kirim, pernyataan, alasan putusan.
+  route("GET", "/api/deals/:id/keys", authed(({ user, params }) => {
+    const r = getDeal(params.id);
+    if (!r || (r.buyer_id !== user.id && r.seller_id !== user.id && !d.isModerator(user))) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
+    const keyOf = (id: string) => {
+      const u = d.getUser(id);
+      return u?.public_key ? { id: u.id, publicKey: u.public_key } : null;
+    };
+    const keys: DealKeys = {
+      buyer: keyOf(r.buyer_id as string),
+      seller: keyOf(r.seller_id as string),
+      moderators: d.moderatorIds().map(keyOf).filter((k): k is { id: string; publicKey: string } => !!k),
+    };
+    return keys;
+  }));
+
   // Pembeli membuat kesepakatan dari produk etalase.
   route("POST", "/api/deals", authed(async ({ req, user }) => {
-    const body = await d.readJson(req);
+    const body = await d.readJson(req, 256 * 1024);
+    rejectPlaintext(body, "title");
     const key = idemKey(body);
     const productId = d.str(body, "productId", { min: 1, max: 64 });
     d.limit(`deal-create:${user.id}`, 20, HOUR, "Terlalu banyak kesepakatan dibuat dalam satu jam.");
@@ -471,7 +501,7 @@ export function registerCommerce(d: CommerceDeps) {
     if (!seller || seller.id === user.id) throw new HttpError(400, "own_product", "Tidak bisa membeli produk sendiri");
     if (!d.areContacts(user.id, seller.id)) throw new HttpError(404, "not_found", "Produk tidak ditemukan atau sudah ditarik");
     if (!isPro(seller)) throw new HttpError(409, "seller_not_pro", "Etalase penjual sedang tidak aktif");
-    const { row, created } = insertDeal({ buyer: user.id, seller: seller.id, createdBy: user.id, productId, title: prod.title as string, price: prod.price as number, key });
+    const { row, created } = insertDeal({ buyer: user.id, seller: seller.id, creator: user, productId, price: prod.price as number, key, content: body.sealed });
     if (created) notifyDeal(row);
     return toDeal(row, user.id);
   }));
@@ -479,14 +509,14 @@ export function registerCommerce(d: CommerceDeps) {
   // Penjual PRO menawarkan kesepakatan kustom dari chat (tombol jabat tangan).
   route("POST", "/api/deals/offer", authed(async ({ req, user }) => {
     requirePro(user);
-    const body = await d.readJson(req);
+    const body = await d.readJson(req, 256 * 1024);
+    rejectPlaintext(body, "title");
     const key = idemKey(body);
     const buyerId = d.str(body, "buyerId", { min: 1, max: 64 });
-    const t = title(body);
     const p = price(body);
     d.limit(`deal-create:${user.id}`, 20, HOUR, "Terlalu banyak kesepakatan dibuat dalam satu jam.");
     if (buyerId === user.id || !d.areContacts(user.id, buyerId)) throw new HttpError(404, "not_found", "Kontak tidak ditemukan");
-    const { row, created } = insertDeal({ buyer: buyerId, seller: user.id, createdBy: user.id, productId: null, title: t, price: p, key });
+    const { row, created } = insertDeal({ buyer: buyerId, seller: user.id, creator: user, productId: null, price: p, key, content: body.sealed });
     if (created) notifyDeal(row);
     return toDeal(row, user.id);
   }));
@@ -506,12 +536,16 @@ export function registerCommerce(d: CommerceDeps) {
     const r = getDeal(params.id);
     if (!r || (r.buyer_id !== user.id && r.seller_id !== user.id)) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
     if (r.status !== "DISPUTED") throw new HttpError(409, "not_disputed", "Pernyataan hanya bisa dikirim saat sengketa berjalan");
-    const text = d.cleanText(d.str(await d.readJson(req), "text", { min: 1, max: STATEMENT_MAX * 2 })).slice(0, STATEMENT_MAX);
-    if (text.length < 5) throw new HttpError(400, "bad_statement", "Pernyataan terlalu pendek");
+    const body = await d.readJson(req, 256 * 1024);
+    rejectPlaintext(body, "text");
     const role = r.buyer_id === user.id ? "buyer" : "seller";
     const count = db.prepare("SELECT COUNT(*) AS n FROM deal_statements WHERE deal_id = ? AND author_id = ?").get(r.id as string, user.id) as { n: number };
     if (count.n >= STATEMENTS_PER_PARTY) throw new HttpError(429, "too_many_statements", `Maksimal ${STATEMENTS_PER_PARTY} pernyataan per pihak`);
-    db.prepare("INSERT INTO deal_statements (deal_id, author_id, role, text, created_at) VALUES (?, ?, ?, ?, ?)").run(r.id as string, user.id, role, text, Date.now());
+    // Pernyataan = sealed object untuk pembeli, penjual & moderator — server tidak bisa membacanya.
+    tx(db, () => {
+      const objectId = d.sealed.store(body.sealed, "statement", user, r.id as string);
+      db.prepare("INSERT INTO deal_statements (deal_id, author_id, role, text, created_at, object_id) VALUES (?, ?, ?, '', ?, ?)").run(r.id as string, user.id, role, Date.now(), objectId);
+    });
     notifyDeal(r);
     notifyModerators();
     return toDeal(getDeal(params.id)!, user.id);
@@ -567,37 +601,26 @@ export function registerCommerce(d: CommerceDeps) {
       }
     }
 
-    let extra: Extra = {};
-    let statement: string | null = null;
-    if (action === "ship") {
-      // Bukti kirim WAJIB: dasar moderator memutus sengketa dan perlindungan penjual jujur.
-      const body = await d.readJson(req);
-      const courier = d.str(body, "courier", { min: 1, max: 60 });
-      if (!(COURIERS as readonly string[]).includes(courier)) throw new HttpError(400, "bad_courier", "Pilih kurir dari daftar");
-      const note = d.cleanText(d.str(body, "note", { max: SHIP_NOTE_MAX * 2, optional: true })).slice(0, SHIP_NOTE_MAX);
-      const rawTracking = d.str(body, "tracking", { max: 60, optional: true }).trim().toUpperCase();
-      if (NO_TRACKING_COURIERS.includes(courier)) {
-        if (note.length < 10) throw new HttpError(400, "note_required", "Jelaskan cara penyerahan (min. 10 karakter), mis. waktu & tempat serah terima");
-      } else if (!TRACKING_RE.test(rawTracking)) {
-        throw new HttpError(400, "bad_tracking", "Nomor resi wajib diisi (6–40 huruf/angka)");
-      }
-      extra = { courier, tracking: rawTracking || null, ship_note: note };
-    }
-    if (action === "dispute") {
-      const body = await d.readJson(req);
-      const reason = d.str(body, "reason", { min: 1, max: 40 });
-      if (!(reason in DISPUTE_REASONS)) throw new HttpError(400, "bad_reason", "Pilih alasan sengketa");
-      statement = d.cleanText(d.str(body, "text", { min: 1, max: STATEMENT_MAX * 2 })).slice(0, STATEMENT_MAX);
-      if (statement.length < 10) throw new HttpError(400, "bad_statement", "Ceritakan masalahnya (min. 10 karakter) agar moderator bisa menilai");
-      extra = { dispute_reason: reason };
-    }
-
+    // Bukti kirim ("ship") & cerita sengketa ("dispute") WAJIB, sebagai sealed object untuk pembeli,
+    // penjual & moderator. Isi (kurir, resi, alasan, cerita) divalidasi di perangkat; server hanya
+    // memastikan objeknya ada, sah, dan ditujukan ke pihak yang berhak.
+    const body = action === "ship" || action === "dispute" ? await d.readJson(req, 256 * 1024) : null;
+    if (body) rejectPlaintext(body, "courier", "tracking", "note", "reason", "text");
     const now = Date.now();
-    const updated = transition(params.id, role, action, now, extra);
-    if (statement) {
-      db.prepare("INSERT INTO deal_statements (deal_id, author_id, role, text, created_at) VALUES (?, ?, ?, ?, ?)").run(params.id, user.id, role, statement, now);
-      notifyModerators();
-    }
+    const updated = tx(db, () => {
+      if (action === "ship") {
+        const shipmentId = d.sealed.store(body!.sealed, "shipment", user, r.id as string);
+        return transition(params.id, role, action, now, { shipment_object: shipmentId });
+      }
+      if (action === "dispute") {
+        const objectId = d.sealed.store(body!.sealed, "statement", user, r.id as string);
+        const out = transition(params.id, role, action, now);
+        db.prepare("INSERT INTO deal_statements (deal_id, author_id, role, text, created_at, object_id) VALUES (?, ?, ?, '', ?, ?)").run(params.id, user.id, role, now, objectId);
+        return out;
+      }
+      return transition(params.id, role, action, now);
+    });
+    if (action === "dispute") notifyModerators();
     notifyDeal(updated);
     return toDeal(updated, user.id);
   }));
@@ -634,23 +657,25 @@ export function registerCommerce(d: CommerceDeps) {
   route("POST", "/api/mod/disputes/:id/resolve", authed(async ({ req, user, params }) => {
     requireModerator(user);
     d.limit(`mod-resolve:${user.id}`, 60, HOUR, "Terlalu banyak keputusan dalam satu jam.");
-    const body = await d.readJson(req);
+    const body = await d.readJson(req, 256 * 1024);
+    rejectPlaintext(body, "reason");
     const decision = d.str(body, "decision", { min: 1, max: 10 });
     if (decision !== "refund" && decision !== "release") throw new HttpError(400, "bad_decision", "Keputusan harus refund atau release");
-    const reason = d.cleanText(d.str(body, "reason", { min: 1, max: 1000 })).slice(0, 500);
-    if (reason.length < RESOLUTION_REASON_MIN) throw new HttpError(400, "reason_required", `Alasan keputusan wajib (min. ${RESOLUTION_REASON_MIN} karakter) — akan dibaca kedua pihak`);
+    if (!body.sealed) throw new HttpError(400, "reason_required", "Alasan keputusan wajib (terenkripsi untuk kedua pihak)");
     const r = getDeal(params.id);
     if (!r) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
     // Konflik kepentingan: moderator tidak boleh memutus kesepakatannya sendiri.
     if (r.buyer_id === user.id || r.seller_id === user.id) throw new HttpError(403, "conflict_of_interest", "Kamu terlibat dalam kesepakatan ini");
     const now = Date.now();
     const updated = tx(db, () => {
+      // Keputusan (refund/release) harus terbaca server untuk memindahkan dana; ALASANNYA terenkripsi.
+      const reasonId = d.sealed.store(body.sealed, "resolution", user, r.id as string);
       const out = transition(params.id, "moderator", decision === "refund" ? "refund" : "confirm", now, {
         resolution: decision,
-        resolution_reason: reason,
         resolved_by: user.id,
+        resolution_object: reasonId,
       });
-      db.prepare("INSERT INTO moderation_log (deal_id, moderator_id, decision, reason, created_at) VALUES (?, ?, ?, ?, ?)").run(params.id, user.id, decision, reason, now);
+      db.prepare("INSERT INTO moderation_log (deal_id, moderator_id, decision, reason, created_at, reason_object) VALUES (?, ?, ?, '', ?, ?)").run(params.id, user.id, decision, now, reasonId);
       return out;
     });
     notifyDeal(updated);
@@ -696,11 +721,8 @@ export function registerCommerce(d: CommerceDeps) {
       try {
         // Dicatat sebagai putusan sistem agar kedua pihak tahu alasannya.
         notifyDeal(
-          transition(id, "system", "refund", now, {
-            resolution: "refund",
-            resolution_reason: "Sengketa tidak terselesaikan dalam batas waktu — dana yang belum pernah cair dikembalikan ke pembeli.",
-            resolved_by: "system",
-          }),
+          // Sistem tak punya kunci untuk menyegel alasan: klien menampilkan teks tetap untuk by="system".
+          transition(id, "system", "refund", now, { resolution: "refund", resolved_by: "system" }),
         );
         out.refunded++;
       } catch {

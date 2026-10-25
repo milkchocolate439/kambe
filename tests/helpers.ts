@@ -3,6 +3,49 @@ import WebSocket from "ws";
 import { createApp } from "../server/app.ts";
 import type { DealTimers } from "../server/commerce.ts";
 import type { ServerEvent } from "../shared/protocol.ts";
+import { generateIdentity, type Identity } from "../shared/e2ee.ts";
+import { openSealed, seal, type Recipient, type SealedBlob, type SealedKind, type SealedView } from "../shared/sealed.ts";
+
+// ------------------------------------------------ pembantu dagang terenkripsi ---
+
+/** Pajang produk: nama/deskripsi/sektor disegel untuk semua kontak penjual. */
+export async function addProduct(seller: Client, p: { title: string; price: number; sector?: string; description?: string }) {
+  const content = { title: p.title, description: p.description ?? "", sector: p.sector ?? "Lainnya" };
+  return seller.post("/api/products", { price: p.price, sealed: await seller.seal("product", content, await seller.contactParties()) });
+}
+
+/** Pembeli membuat kesepakatan dari produk; judul disegel untuk penjual & moderator. */
+export async function createDeal(buyer: Client, productId: string, idempotencyKey: string, seller: Recipient, title = "Barang") {
+  const sealed = await buyer.seal("deal", { title }, [seller, ...(await buyer.modParties())]);
+  return buyer.post("/api/deals", { productId, idempotencyKey, sealed });
+}
+
+/** Penjual menawarkan kesepakatan kustom. */
+export async function offerDeal(seller: Client, buyer: Recipient, title: string, price: number, idempotencyKey: string) {
+  const sealed = await seller.seal("deal", { title }, [buyer, ...(await seller.modParties())]);
+  return seller.post("/api/deals/offer", { buyerId: buyer.id, title: undefined, price, idempotencyKey, sealed });
+}
+
+export const DEFAULT_SHIPMENT = { courier: "JNE", tracking: "JNE1234567890", note: "" };
+
+/** Aksi "kirim" dengan bukti kirim terenkripsi untuk pembeli, penjual & moderator. */
+export async function shipDeal(seller: Client, dealId: string, shipment: unknown = DEFAULT_SHIPMENT) {
+  return seller.post(`/api/deals/${dealId}/ship`, { sealed: await seller.seal("shipment", shipment, await seller.dealParties(dealId)) });
+}
+
+export const DEFAULT_DISPUTE = { reason: "not_received", text: "Paket belum sampai padahal status resi sudah terkirim." };
+
+export async function disputeDeal(buyer: Client, dealId: string, content: unknown = DEFAULT_DISPUTE) {
+  return buyer.post(`/api/deals/${dealId}/dispute`, { sealed: await buyer.seal("statement", content, await buyer.dealParties(dealId)) });
+}
+
+export async function addStatement(who: Client, dealId: string, text: string) {
+  return who.post(`/api/deals/${dealId}/statements`, { sealed: await who.seal("statement", { text }, await who.dealParties(dealId)) });
+}
+
+export async function resolveDispute(mod: Client, dealId: string, decision: string, reason: string) {
+  return mod.post(`/api/mod/disputes/${dealId}/resolve`, { decision, sealed: await mod.seal("resolution", { reason }, await mod.dealParties(dealId)) });
+}
 
 export const TEST_PASSPHRASE = "kunci-uji-yang-panjang-sekali";
 
@@ -52,10 +95,53 @@ export class Client {
   patch = <T = any>(p: string, b: unknown = {}) => this.req<T>("PATCH", p, b);
   del = <T = any>(p: string) => this.req<T>("DELETE", p);
 
+  /** Kunci perangkat (seperti aplikasi asli: dibuat & didaftarkan saat pertama masuk). */
+  key!: Identity;
+  id!: string;
+
   async signup(alias: string, passphrase = TEST_PASSPHRASE) {
     const r = await this.post("/api/auth/signup", { alias, passphrase });
     if (r.status !== 200) throw new Error(`signup ${alias} gagal: ${r.status} ${JSON.stringify(r.body)}`);
+    this.id = r.body.me.id;
+    await this.useKey(await generateIdentity());
     return r.body as { me: { id: string; pin: string; alias: string }; recoveryCode: string };
+  }
+
+  /** Ganti kunci perangkat (mis. simulasi ganti HP). */
+  async useKey(key: Identity) {
+    this.key = key;
+    const r = await this.put("/api/me/key", { publicKey: key.publicKey });
+    if (r.status !== 200) throw new Error(`gagal mendaftarkan kunci: ${r.status} ${JSON.stringify(r.body)}`);
+  }
+
+  get party(): Recipient {
+    return { id: this.id, publicKey: this.key.publicKey };
+  }
+
+  /** Segel isi sebagai pengguna ini (persis seperti klien). */
+  seal(kind: SealedKind, content: unknown, recipients: Recipient[] = []): Promise<SealedBlob> {
+    return seal(this.key.privateKey, this.party, kind, content, recipients);
+  }
+
+  /** Buka isi terenkripsi dengan kunci perangkat pengguna ini. */
+  open<T = unknown>(view: SealedView | null | undefined): Promise<T> {
+    if (!view) throw new Error("tidak ada objek terenkripsi");
+    return openSealed<T>(this.key.privateKey, this.key.publicKey, view);
+  }
+
+  async contactParties(): Promise<Recipient[]> {
+    const cs = (await this.get("/api/contacts")).body.contacts as { id: string; publicKey: string | null }[];
+    return cs.filter((c) => c.publicKey).map((c) => ({ id: c.id, publicKey: c.publicKey! }));
+  }
+
+  async modParties(): Promise<Recipient[]> {
+    return (await this.get("/api/mod/keys")).body.moderators as Recipient[];
+  }
+
+  /** Pembeli, penjual & moderator kesepakatan (penerima sah untuk isi terkait kesepakatan). */
+  async dealParties(dealId: string): Promise<Recipient[]> {
+    const k = (await this.get(`/api/deals/${dealId}/keys`)).body as { buyer: Recipient | null; seller: Recipient | null; moderators: Recipient[] };
+    return [k.buyer, k.seller, ...k.moderators].filter((x): x is Recipient => !!x);
   }
 
   async socket(): Promise<Socket> {

@@ -28,6 +28,7 @@ export interface UserRow {
   pin_rotate_days: number;
   pin_rotated_at: number;
   gateway_account: string | null;
+  pm_object: string | null;
 }
 
 export interface Ctx {

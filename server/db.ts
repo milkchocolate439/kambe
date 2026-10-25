@@ -123,6 +123,31 @@ CREATE TABLE IF NOT EXISTS ledger (
 CREATE INDEX IF NOT EXISTS ledger_account ON ledger(account);
 CREATE INDEX IF NOT EXISTS ledger_ref ON ledger(ref);
 
+-- Sealed object: isi terenkripsi multi-penerima (catatan, status, etalase, judul kesepakatan, bukti
+-- kirim, pernyataan, alasan putusan, label). Server hanya memegang ciphertext + bungkus kunci.
+CREATE TABLE IF NOT EXISTS sealed_objects (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL,
+  owner_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  owner_key   TEXT NOT NULL,
+  nonce       TEXT NOT NULL,
+  ciphertext  TEXT NOT NULL,
+  context     TEXT,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sealed_owner ON sealed_objects(owner_id, kind);
+CREATE INDEX IF NOT EXISTS sealed_context ON sealed_objects(context);
+
+CREATE TABLE IF NOT EXISTS sealed_wraps (
+  object_id      TEXT NOT NULL REFERENCES sealed_objects(id) ON DELETE CASCADE,
+  recipient_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipient_key  TEXT NOT NULL,
+  nonce          TEXT NOT NULL,
+  wrapped        TEXT NOT NULL,
+  PRIMARY KEY (object_id, recipient_id)
+);
+CREATE INDEX IF NOT EXISTS wraps_recipient ON sealed_wraps(recipient_id);
+
 -- Kuitansi notaris berantai per kesepakatan (lihat shared/receipt.ts). Append-only.
 CREATE TABLE IF NOT EXISTS deal_receipts (
   deal_id     TEXT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
@@ -239,6 +264,25 @@ function migrate(db: DatabaseSync) {
   // PIN dinamis: rotasi PIN utama otomatis (0 = mati).
   if (!userCols.includes("pin_rotate_days")) db.exec("ALTER TABLE users ADD COLUMN pin_rotate_days INTEGER NOT NULL DEFAULT 0");
   if (!userCols.includes("pin_rotated_at")) db.exec("ALTER TABLE users ADD COLUMN pin_rotated_at INTEGER NOT NULL DEFAULT 0");
+
+  // Enkripsi isi: kolom teks lama dikosongkan, isi pindah ke sealed_objects (lihat server/sealed.ts).
+  const addCol = (table: string, name: string, def: string) => {
+    const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+  };
+  addCol("users", "pm_object", "TEXT");
+  addCol("contact_requests", "note_object", "TEXT");
+  addCol("shadow_pins", "label_object", "TEXT");
+  addCol("products", "content_object", "TEXT");
+  addCol("deals", "content_object", "TEXT");
+  addCol("deals", "shipment_object", "TEXT");
+  addCol("deals", "resolution_object", "TEXT");
+  addCol("deal_statements", "object_id", "TEXT");
+  addCol("moderation_log", "reason_object", "TEXT");
+  // Data teks lama (sebelum enkripsi isi) dihapus — tidak boleh tertinggal di server.
+  db.exec("UPDATE users SET pm = '' WHERE pm != ''");
+  db.exec("UPDATE contact_requests SET note = '' WHERE note != ''");
+  db.exec("UPDATE shadow_pins SET label = '' WHERE label != '' AND kind != 'radar'");
   // PIN yang dipakai saat terhubung (shadow/radar) — itulah yang ditampilkan ke pihak pengundang.
   for (const table of ["contacts", "contact_requests"]) {
     const c = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((x) => x.name);

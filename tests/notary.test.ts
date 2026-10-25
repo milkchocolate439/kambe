@@ -4,13 +4,13 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Client, startApp } from "./helpers.ts";
+import { addProduct, Client, createDeal, shipDeal, startApp } from "./helpers.ts";
 import { parseReceipt, verifyChain, verifyReceipt, type SignedReceipt } from "../shared/receipt.ts";
+import { sealedHash } from "../shared/sealed.ts";
 import { createNotary, loadNotaryKey } from "../server/notary.ts";
 import { createApp } from "../server/app.ts";
 
 const key = () => crypto.randomUUID().replace(/-/g, "");
-const SHIP = { courier: "JNE", tracking: "JNE1234567890" };
 
 async function dealFlow() {
   const env = await startApp();
@@ -21,8 +21,8 @@ async function dealFlow() {
   await buyer.post("/api/contacts/invite", { pin: s.me.pin });
   await seller.post(`/api/contacts/requests/${(await seller.get("/api/contacts")).body.incoming[0].id}/accept`);
   await seller.post("/api/pro/subscribe", { idempotencyKey: key() });
-  const prod = (await seller.post("/api/products", { title: "Arabica 1 Kg", sector: "Komoditas & Pangan", price: 200_000 })).body;
-  const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
+  const prod = (await addProduct(seller, { title: "Arabica 1 Kg", sector: "Komoditas & Pangan", price: 200_000 })).body;
+  const deal = (await createDeal(buyer, prod.id, key(), seller.party, "Arabica 1 Kg")).body;
   return { ...env, seller, buyer, deal };
 }
 
@@ -35,9 +35,12 @@ test("setiap perubahan status menerbitkan kuitansi notaris yang sah & berantai",
   assert.equal(parseReceipt(deal.receipt).seq, 0);
   assert.equal(parseReceipt(deal.receipt).status, "AWAITING_PAYMENT");
   assert.equal(await verifyReceipt(cfg.notaryPublicKey, deal.receipt), true);
+  // Kuitansi mengikat SIDIK isi terenkripsi (judul) — judul tak bisa ditukar diam-diam, tanpa membuka isinya.
+  assert.equal(parseReceipt(deal.receipt).contentHash, await sealedHash(deal.content));
+  assert.ok(!deal.receipt.body.includes("Arabica"), "kuitansi tidak memuat judul sebagai teks");
 
   await buyer.post(`/api/deals/${deal.id}/pay`);
-  await seller.post(`/api/deals/${deal.id}/ship`, SHIP);
+  await shipDeal(seller, deal.id);
   const done = (await buyer.post(`/api/deals/${deal.id}/confirm`)).body;
   const last = parseReceipt(done.receipt);
   assert.equal(last.seq, 3);
@@ -73,14 +76,14 @@ test("kuitansi palsu / diubah / rantai dipotong terdeteksi klien", async () => {
 });
 
 test("kuitansi hanya untuk pihak terkait; kode bayar sekali pakai tanpa identitas", async () => {
-  const { app, base, buyer, deal } = await dealFlow();
+  const { app, base, buyer, seller, deal } = await dealFlow();
   const eve = new Client(base);
   await eve.signup("Eve_Pengintip");
   assert.equal((await eve.get(`/api/deals/${deal.id}/receipts`)).status, 404);
   assert.match(deal.payRef, /^PP-[2-9A-HJ-NP-Z]{10}$/);
   const me = (await buyer.get("/api/me")).body.me;
   assert.ok(!deal.payRef.includes(me.pin) && !deal.payRef.includes(me.alias), "kode bayar tidak memuat PIN/alias");
-  const d2 = (await buyer.post("/api/deals", { productId: deal.productId, idempotencyKey: key() })).body;
+  const d2 = (await createDeal(buyer, deal.productId, key(), seller.party)).body;
   assert.notEqual(d2.payRef, deal.payRef, "setiap kesepakatan punya kode bayar berbeda");
   await app.close();
 });
@@ -97,8 +100,8 @@ test("fee dapat diatur lewat konfigurasi; tarif tidak masuk akal ditolak saat st
   await buyer.post("/api/contacts/invite", { pin: s.me.pin });
   await seller.post(`/api/contacts/requests/${(await seller.get("/api/contacts")).body.incoming[0].id}/accept`);
   await seller.post("/api/pro/subscribe", { idempotencyKey: key() });
-  const prod = (await seller.post("/api/products", { title: "Jasa desain", sector: "Desain & Kreatif", price: 100_000 })).body;
-  const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
+  const prod = (await addProduct(seller, { title: "Jasa desain", sector: "Desain & Kreatif", price: 100_000 })).body;
+  const deal = (await createDeal(buyer, prod.id, key(), seller.party)).body;
   assert.equal(deal.fee, 2_500, "2,5% sesuai konfigurasi");
   assert.equal((await fetch(base + "/api/config").then((r) => r.json()) as { feePerMille: number }).feePerMille, 25);
   await app.close();

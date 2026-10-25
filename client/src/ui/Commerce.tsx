@@ -11,10 +11,13 @@ import {
   type Deal,
   type DealAction,
   type DealStatus,
+  type DealContent,
   type Product,
+  type ProductContent,
 } from "../../../shared/protocol.ts";
+import { cleanDisplayText } from "../../../shared/sealed.ts";
 import { ApiError } from "../lib/api.ts";
-import { Modal, timeOf, useMessenger } from "./common.tsx";
+import { Modal, SealedText, timeOf, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 import { DisputeModal, DisputeThread, ResolutionNote, ShipmentInfo, ShipModal } from "./Disputes.tsx";
 
@@ -142,7 +145,9 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         </span>
         <SimBadge />
       </div>
-      <strong>{deal.title}</strong>
+      <strong>
+        <SealedText<DealContent> view={deal.content} field="title" locked="🔒 Judul terenkripsi (menunggu dibagikan)" max={PRODUCT_TITLE_MAX} />
+      </strong>
       <div className="deal-grid small">
         <span className="muted">{iAmBuyer ? "Kamu membeli dari" : "Kamu menjual ke"}</span>
         <span>{peerAlias}</span>
@@ -212,7 +217,9 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         <Modal title={meta(pending).label} onClose={() => setPending(null)}>
           <div className="stack">
             <div className="row">
-              <strong className="grow">{deal.title}</strong>
+              <strong className="grow">
+                <SealedText<DealContent> view={deal.content} field="title" max={PRODUCT_TITLE_MAX} />
+              </strong>
               <SimBadge />
             </div>
             <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>{meta(pending).confirm!(deal)}</p>
@@ -264,7 +271,7 @@ function ReceiptLine({ deal }: { deal: Deal }) {
 export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerAlias: string; onClose: () => void }) {
   const [s, m] = useMessenger();
   const catalog = s.catalogs[peer];
-  const [chosen, setChosen] = useState<Product | null>(null);
+  const [chosen, setChosen] = useState<{ product: Product; content: ProductContent } | null>(null);
   const [idem, setIdem] = useState(newKey);
   const { busy, error, run, setError } = useAction();
 
@@ -274,7 +281,8 @@ export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerA
 
   async function buy() {
     if (!chosen) return;
-    const deal = await run(() => m.createDeal(peer, chosen.id, idem), "Kesepakatan dibuat. Lanjutkan pembayaran di kartu kesepakatan.");
+    // Judul diambil dari isi produk yang sudah didekripsi, lalu disegel ulang untuk penjual & moderator.
+    const deal = await run(() => m.createDeal(peer, chosen.product.id, idem, chosen.content.title), "Kesepakatan dibuat. Lanjutkan pembayaran di kartu kesepakatan.");
     if (deal) onClose();
   }
 
@@ -292,14 +300,14 @@ export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerA
       ) : chosen ? (
         <div className="stack">
           <div className="row">
-            <strong className="grow">{chosen.title}</strong>
+            <strong className="grow">{cleanDisplayText(chosen.content.title, PRODUCT_TITLE_MAX)}</strong>
             <SimBadge />
           </div>
           <div className="deal-grid small">
             <span className="muted">Harga (dikunci server)</span>
-            <span className="mono">{rupiah(chosen.price)}</span>
+            <span className="mono">{rupiah(chosen.product.price)}</span>
             <span className="muted">Fee platform ditanggung penjual</span>
-            <span className="mono">{rupiah(platformFee(chosen.price, s.config?.feePerMille))}</span>
+            <span className="mono">{rupiah(platformFee(chosen.product.price, s.config?.feePerMille))}</span>
           </div>
           <div className="banner info" style={{ borderRadius: 12, border: 0 }}>
             <Icon name="shieldCheck" />
@@ -318,20 +326,37 @@ export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerA
       ) : (
         <div className="list">
           {catalog.products.map((p) => (
-            <button key={p.id} className="item" style={{ alignItems: "flex-start" }} onClick={() => setChosen(p)}>
-              <div className="grow">
-                <div className="row" style={{ gap: 6 }}>
-                  <span className="name">{p.title}</span>
-                </div>
-                <div className="tiny muted">{p.sector}</div>
-                {p.description && <div className="small" style={{ color: "var(--text-2)", marginTop: 4, whiteSpace: "pre-wrap" }}>{p.description}</div>}
-              </div>
-              <strong className="mono" style={{ color: "var(--ok)", whiteSpace: "nowrap" }}>{rupiah(p.price)}</strong>
-            </button>
+            <CatalogItem key={p.id} product={p} onChoose={(content) => setChosen({ product: p, content })} />
           ))}
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Satu produk etalase: isi didekripsi di perangkat; bila kunci belum dibagikan, tidak bisa dibeli dulu. */
+function CatalogItem({ product, onChoose }: { product: Product; onChoose: (c: ProductContent) => void }) {
+  const s = useSealed<ProductContent>(product.content);
+  const content = s.state === "ok" ? s.data : null;
+  return (
+    <button className="item" style={{ alignItems: "flex-start" }} disabled={!content} onClick={() => content && onChoose(content)}>
+      <div className="grow">
+        {content ? (
+          <>
+            <span className="name">{cleanDisplayText(content.title, PRODUCT_TITLE_MAX)}</span>
+            <div className="tiny muted">{cleanDisplayText(content.sector, 40)}</div>
+            {content.description && (
+              <div className="small" style={{ color: "var(--text-2)", marginTop: 4, whiteSpace: "pre-wrap" }}>
+                {cleanDisplayText(content.description, PRODUCT_DESC_MAX)}
+              </div>
+            )}
+          </>
+        ) : (
+          <span className="small muted">{s.state === "loading" ? "Membuka…" : "🔒 Menunggu penjual online untuk membagikan kunci etalase"}</span>
+        )}
+      </div>
+      <strong className="mono" style={{ color: "var(--ok)", whiteSpace: "nowrap" }}>{rupiah(product.price)}</strong>
+    </button>
   );
 }
 
@@ -551,34 +576,25 @@ function ProTab() {
   );
 }
 
+type ProductDraft = { id?: string; price: number } & ProductContent;
+
 function ProductsTab() {
-  const [s, m] = useMessenger();
-  const [editing, setEditing] = useState<Partial<Product> | null>(null);
+  const [s] = useMessenger();
+  const [editing, setEditing] = useState<ProductDraft | null>(null);
   const { busy, error, run } = useAction();
 
   if (editing) return <ProductForm initial={editing} onDone={() => setEditing(null)} />;
   return (
     <div className="stack">
-      <button className="btn primary block" onClick={() => setEditing({ sector: SECTORS[0], price: 0 })}>
+      <button className="btn primary block" onClick={() => setEditing({ title: "", description: "", sector: SECTORS[0], price: 0 })}>
         <Icon name="plus" /> Tambah produk / jasa
       </button>
       {s.myProducts.length === 0 ? (
-        <div className="hint" style={{ textAlign: "center" }}>Etalase masih kosong. Hanya kontakmu yang bisa melihatnya.</div>
+        <div className="hint" style={{ textAlign: "center" }}>Etalase masih kosong. Hanya kontakmu yang bisa melihatnya (terenkripsi).</div>
       ) : (
         <div className="list">
           {s.myProducts.map((p) => (
-            <div key={p.id} className="row" style={{ padding: "8px 4px", borderBottom: "1px solid var(--line)" }}>
-              <div className="grow">
-                <div className="truncate" style={{ fontWeight: 700 }}>{p.title}</div>
-                <div className="tiny muted">{p.sector} · <span className="mono">{rupiah(p.price)}</span></div>
-              </div>
-              <button className="btn ghost icon" aria-label={`Ubah ${p.title}`} onClick={() => setEditing(p)}>
-                <Icon name="edit" />
-              </button>
-              <button className="btn ghost icon" aria-label={`Hapus ${p.title}`} disabled={busy} onClick={() => void run(() => m.deleteProduct(p.id), "Produk ditarik dari etalase")}>
-                <Icon name="trash" />
-              </button>
-            </div>
+            <MyProductRow key={p.id} product={p} busy={busy} run={run} onEdit={setEditing} />
           ))}
         </div>
       )}
@@ -587,12 +603,35 @@ function ProductsTab() {
   );
 }
 
-function ProductForm({ initial, onDone }: { initial: Partial<Product>; onDone: () => void }) {
+function MyProductRow({ product: p, busy, run, onEdit }: { product: Product; busy: boolean; run: ReturnType<typeof useAction>["run"]; onEdit: (d: ProductDraft) => void }) {
   const [, m] = useMessenger();
-  const [title, setTitle] = useState(initial.title ?? "");
-  const [description, setDescription] = useState(initial.description ?? "");
-  const [sector, setSector] = useState(initial.sector ?? SECTORS[0]);
-  const [price, setPrice] = useState(initial.price ?? 0);
+  const s = useSealed<ProductContent>(p.content);
+  const c = s.state === "ok" ? s.data : null;
+  const title = c ? cleanDisplayText(c.title, PRODUCT_TITLE_MAX) : "🔒";
+  return (
+    <div className="row" style={{ padding: "8px 4px", borderBottom: "1px solid var(--line)" }}>
+      <div className="grow">
+        <div className="truncate" style={{ fontWeight: 700 }}>{title}</div>
+        <div className="tiny muted">
+          {c ? cleanDisplayText(c.sector, 40) : "—"} · <span className="mono">{rupiah(p.price)}</span>
+        </div>
+      </div>
+      <button className="btn ghost icon" aria-label={`Ubah ${title}`} disabled={!c} onClick={() => c && onEdit({ id: p.id, price: p.price, ...c })}>
+        <Icon name="edit" />
+      </button>
+      <button className="btn ghost icon" aria-label={`Hapus ${title}`} disabled={busy} onClick={() => void run(() => m.deleteProduct(p.id), "Produk ditarik dari etalase")}>
+        <Icon name="trash" />
+      </button>
+    </div>
+  );
+}
+
+function ProductForm({ initial, onDone }: { initial: ProductDraft; onDone: () => void }) {
+  const [, m] = useMessenger();
+  const [title, setTitle] = useState(initial.title);
+  const [description, setDescription] = useState(initial.description);
+  const [sector, setSector] = useState(initial.sector || SECTORS[0]);
+  const [price, setPrice] = useState(initial.price);
   const { busy, error, run } = useAction();
   const problem = priceProblem(price);
 

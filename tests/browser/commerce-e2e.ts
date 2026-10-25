@@ -189,11 +189,11 @@ async function main() {
     check(await mod.getByText(/bukan dark seperti disepakati/).isVisible(), "moderator membaca pernyataan pembeli");
     check(await mod.getByText(/Diserahkan langsung di Pasar Besar/).isVisible(), "moderator melihat bukti serah terima");
     await mod.getByRole("button", { name: "Refund ke pembeli" }).click();
-    await mod.getByLabel(/alasan \(dibaca kedua pihak\)/).fill("Penjual tidak membantah perbedaan tingkat roasting.");
+    await mod.getByLabel(/alasan \(terenkripsi untuk kedua pihak\)/).fill("Penjual tidak membantah perbedaan tingkat roasting.");
     await mod.getByRole("button", { name: "Putuskan (final)" }).click();
     await mod.getByText("Tidak ada sengketa terbuka.").waitFor();
     await mod.screenshot({ path: join(OUT, "c5-moderator.png") });
-    await roast.getByText(/Putusan: dana dikembalikan ke pembeli/).waitFor();
+    await roast.getByText(/Putusan moderator: dana dikembalikan ke pembeli/).waitFor();
     check(await roast.getByText("Penjual tidak membantah perbedaan tingkat roasting.").isVisible(), "pembeli melihat putusan & alasannya real-time");
     check(!(await buyer.getByRole("button", { name: "Moderasi sengketa" }).count()), "pengguna biasa tidak punya tombol moderasi");
 

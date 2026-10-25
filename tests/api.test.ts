@@ -10,10 +10,8 @@ async function connectedPair() {
   const bob = new Client(env.base);
   const a = await alice.signup("alice");
   const b = await bob.signup("bob_99");
-  const ka = await generateIdentity();
-  const kb = await generateIdentity();
-  await alice.put("/api/me/key", { publicKey: ka.publicKey });
-  await bob.put("/api/me/key", { publicKey: kb.publicKey });
+  const ka = alice.key; // kunci perangkat yang didaftarkan saat signup
+  const kb = bob.key;
   assert.equal((await alice.post("/api/contacts/invite", { pin: b.me.pin })).body.status, "pending");
   const inc = (await bob.get("/api/contacts")).body.incoming;
   await bob.post(`/api/contacts/requests/${inc[0].id}/accept`);
@@ -70,14 +68,22 @@ test("undangan PIN: wajib disetujui, alias tujuan tidak bocor sebelum diterima",
   const bob = new Client(base);
   await alice.signup("alice");
   const b = await bob.signup("bob_rahasia");
-  assert.equal((await alice.post("/api/contacts/invite", { pin: b.me.pin.toLowerCase(), note: "Mau beli kopi" })).status, 200);
+  // Catatan undangan kini E2EE: ambil kunci publik penerima lewat PIN, segel, baru undang.
+  assert.equal((await alice.post("/api/contacts/invite", { pin: b.me.pin, note: "Mau beli kopi" })).body.error, "note_must_be_encrypted");
+  const { publicKey } = (await alice.post("/api/contacts/lookup", { pin: b.me.pin.toLowerCase() })).body;
+  assert.equal(publicKey, bob.key.publicKey);
+  // Pengundang tak tahu ID target → bungkus ditujukan ke penanda "target" (dipetakan server).
+  const sealedNote = await alice.seal("note", { text: "Mau beli kopi" }, [{ id: "target", publicKey }]);
+  assert.equal((await alice.post("/api/contacts/invite", { pin: b.me.pin.toLowerCase(), sealedNote })).status, 200);
   const out = (await alice.get("/api/contacts")).body;
   assert.equal(out.contacts.length, 0);
   assert.deepEqual(Object.keys(out.outgoing[0]).sort(), ["createdAt", "id", "pin"]);
   assert.ok(!JSON.stringify(out).includes("bob_rahasia"));
   const inc = (await bob.get("/api/contacts")).body.incoming;
   assert.equal(inc[0].from.alias, "alice");
-  assert.equal(inc[0].note, "Mau beli kopi");
+  assert.deepEqual(await bob.open(inc[0].note), { text: "Mau beli kopi" });
+  assert.ok(!JSON.stringify(app.db.prepare("SELECT * FROM contact_requests").all()).includes("kopi"), "catatan tidak tersimpan sebagai teks");
+  assert.ok(!JSON.stringify(app.db.prepare("SELECT * FROM sealed_objects").all()).includes("kopi"));
   // Sebelum disetujui tidak bisa membaca/mengirim.
   assert.equal((await alice.get(`/api/messages/${b.me.id}`)).status, 404);
   await bob.post(`/api/contacts/requests/${inc[0].id}/accept`);
@@ -322,12 +328,32 @@ test("logout memutus WebSocket; hapus akun menghapus semua data", async () => {
   await app.close();
 });
 
-test("teks profil dibersihkan dari karakter kontrol & pembalik arah", async () => {
-  const { app, base } = await startApp();
-  const c = new Client(base);
-  await c.signup("rapi");
-  const r = await c.patch("/api/me/settings", { pm: "Jual‮gpj.exe\u0007 kopi" });
-  assert.equal(r.body.me.pm, "Jualgpj.exe kopi");
+test("status pribadi (PM) terenkripsi: hanya kontak yang bisa membaca, server tidak", async () => {
+  const { app, base, alice, bob, a } = await connectedPair();
+  assert.equal((await alice.patch("/api/me/settings", { pm: "teks polos" })).body.error, "pm_must_be_encrypted");
+  const sealedPm = await alice.seal("pm", { text: "Cari supplier rotan Katingan" }, await alice.contactParties());
+  assert.equal((await alice.put("/api/me/status", { sealed: sealedPm })).status, 200);
+  const seenByBob = (await bob.get("/api/contacts")).body.contacts.find((c: { id: string }) => c.id === a.id);
+  assert.deepEqual(await bob.open(seenByBob.pm), { text: "Cari supplier rotan Katingan" });
+  assert.deepEqual(await alice.open((await alice.get("/api/me")).body.me.pm), { text: "Cari supplier rotan Katingan" }, "pemilik membaca statusnya sendiri");
+  assert.ok(!JSON.stringify(app.db.prepare("SELECT * FROM users").all()).includes("rotan"), "status tidak tersimpan sebagai teks");
+
+  // Orang asing tidak bisa dijadikan penerima status.
+  const eve = new Client(base);
+  await eve.signup("eve_kepo");
+  const toEve = await alice.seal("pm", { text: "x" }, [eve.party]);
+  assert.equal((await alice.put("/api/me/status", { sealed: toEve })).body.error, "recipient_not_allowed");
+  // Kontak baru (setelah status dibuat) belum punya bungkus → pemilik menambahkannya.
+  await eve.post("/api/contacts/invite", { pin: (await alice.get("/api/me")).body.me.pin });
+  await alice.post(`/api/contacts/requests/${(await alice.get("/api/contacts")).body.incoming[0].id}/accept`);
+  const forEve = (await eve.get("/api/contacts")).body.contacts.find((c: { id: string }) => c.id === a.id);
+  assert.equal(forEve.pm.wrap, null, "belum dibagikan ke kontak baru");
+  const { addRecipients } = await import("../shared/sealed.ts");
+  const ownView = (await alice.get("/api/me")).body.me.pm;
+  const wraps = await addRecipients(alice.key.privateKey, alice.party, ownView, [eve.party]);
+  assert.equal((await alice.post(`/api/sealed/${ownView.id}/wraps`, { wraps })).status, 200);
+  const later = (await eve.get("/api/contacts")).body.contacts.find((c: { id: string }) => c.id === a.id);
+  assert.deepEqual(await eve.open(later.pm), { text: "Cari supplier rotan Katingan" });
   await app.close();
 });
 

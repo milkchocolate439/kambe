@@ -1,4 +1,6 @@
-// Fase 3 — bukti kirim, sengketa, pernyataan untuk moderator, dan panel moderator.
+// Fase 3 — bukti kirim, sengketa, pernyataan, putusan & panel moderator.
+// SEMUA isi (bukti kirim, cerita, pernyataan, alasan putusan) terenkripsi untuk pembeli, penjual &
+// moderator; server hanya meneruskan ciphertext.
 import { useEffect, useState } from "react";
 import {
   COURIERS,
@@ -10,11 +12,17 @@ import {
   STATEMENTS_PER_PARTY,
   TRACKING_RE,
   type Deal,
+  type DealContent,
   type DisputeReason,
+  type DisputeStatement,
   type ModDispute,
+  type ResolutionContent,
+  type ShipmentContent,
+  type StatementContent,
 } from "../../../shared/protocol.ts";
+import { cleanDisplayText } from "../../../shared/sealed.ts";
 import { ApiError } from "../lib/api.ts";
-import { copyText, Modal, timeOf, useMessenger } from "./common.tsx";
+import { copyText, Modal, SealedText, timeOf, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 
 const rupiah = (n: number) => "Rp" + n.toLocaleString("id-ID");
@@ -57,8 +65,14 @@ export function ShipModal({ deal, peer, onClose }: { deal: Deal; peer: string; o
       : null;
 
   async function submit() {
-    if (await run(() => m.dealAction(peer, deal.id, "ship", { courier, tracking: tracking.trim(), note: note.trim() }))) {
-      m.toast("Ditandai dikirim. Bukti kirim tersimpan untuk pembeli & moderator.", "ok");
+    // Validasi & normalisasi di perangkat: server hanya menerima bukti kirim yang sudah terenkripsi.
+    const content: ShipmentContent = {
+      courier,
+      tracking: noTracking ? null : tracking.trim().toUpperCase(),
+      note: cleanDisplayText(note, SHIP_NOTE_MAX),
+    };
+    if (await run(() => m.dealAction(peer, deal.id, "ship", content))) {
+      m.toast("Ditandai dikirim. Bukti kirim terenkripsi untuk pembeli & moderator.", "ok");
       onClose();
     }
   }
@@ -110,8 +124,16 @@ export function ShipModal({ deal, peer, onClose }: { deal: Deal; peer: string; o
 
 export function ShipmentInfo({ deal }: { deal: Deal }) {
   const [, m] = useMessenger();
+  const opened = useSealed<ShipmentContent>(deal.shipment);
   if (!deal.shipment) return null;
-  const s = deal.shipment;
+  if (opened.state !== "ok") {
+    return (
+      <div className="tiny muted">
+        <Icon name="lock" size={12} /> {opened.state === "loading" ? "Membuka bukti kirim…" : "Bukti kirim terenkripsi (belum dibagikan ke perangkat ini)"}
+      </div>
+    );
+  }
+  const s = { courier: cleanDisplayText(opened.data.courier, 60), tracking: opened.data.tracking ? cleanDisplayText(opened.data.tracking, 40) : null, note: cleanDisplayText(opened.data.note, SHIP_NOTE_MAX) };
   return (
     <div className="tiny" style={{ color: "var(--text-2)" }}>
       <Icon name="send" size={12} /> {s.courier}
@@ -137,7 +159,8 @@ export function DisputeModal({ deal, peer, onClose }: { deal: Deal; peer: string
   const { busy, error, run } = useBusy();
 
   async function submit() {
-    if (await run(() => m.dealAction(peer, deal.id, "dispute", { reason, text: text.trim() }))) {
+    const content: StatementContent = { reason, text: cleanDisplayText(text, STATEMENT_MAX) };
+    if (await run(() => m.dealAction(peer, deal.id, "dispute", content))) {
       m.toast("Sengketa diajukan. Dana tetap ditahan sampai ada penyelesaian.", "ok");
       onClose();
     }
@@ -163,7 +186,7 @@ export function DisputeModal({ deal, peer, onClose }: { deal: Deal; peer: string
           <label htmlFor="dispute-text">Ceritakan masalahnya</label>
           <textarea id="dispute-text" className="textarea" rows={4} maxLength={STATEMENT_MAX} value={text} onChange={(e) => setText(e.target.value)} placeholder="Apa yang terjadi? Sebutkan bukti yang kamu punya (foto, resi, waktu)." />
           <span className="hint">
-            <Icon name="alert" size={12} /> Cerita ini dibaca <strong>moderator</strong> dan penjual — tidak terenkripsi end-to-end. Jangan tulis data pribadi yang tidak perlu.
+            <Icon name="lock" size={12} /> Terenkripsi end-to-end — hanya kamu, penjual, dan <strong>moderator</strong> yang bisa membacanya. Server tidak bisa.
           </span>
         </div>
         {error && <span className="error" role="alert">{error}</span>}
@@ -188,16 +211,8 @@ export function DisputeThread({ deal, peer, myRole }: { deal: Deal; peer: string
 
   return (
     <div className="stack" style={{ gap: 6 }}>
-      {deal.disputeReason && (
-        <div className="tiny" style={{ fontWeight: 700 }}>
-          Alasan sengketa: {DISPUTE_REASONS[deal.disputeReason]}
-        </div>
-      )}
       {deal.statements.map((s, i) => (
-        <div key={i} className="tiny" style={{ padding: "6px 8px", borderRadius: 8, background: "var(--bg-2)", whiteSpace: "pre-wrap" }}>
-          <strong>{s.role === myRole ? "Kamu" : s.role === "buyer" ? "Pembeli" : "Penjual"}</strong> · {when(s.createdAt)}
-          <div>{s.text}</div>
-        </div>
+        <StatementItem key={i} statement={s} label={s.role === myRole ? "Kamu" : s.role === "buyer" ? "Pembeli" : "Penjual"} />
       ))}
       {deal.status === "DISPUTED" && mine < STATEMENTS_PER_PARTY && (
         <div className="row" style={{ alignItems: "flex-end" }}>
@@ -213,20 +228,49 @@ export function DisputeThread({ deal, peer, myRole }: { deal: Deal; peer: string
           </button>
         </div>
       )}
-      {deal.status === "DISPUTED" && <span className="tiny muted">Pernyataan dibaca moderator (tidak terenkripsi end-to-end). Sisa {STATEMENTS_PER_PARTY - mine} pernyataan.</span>}
+      {deal.status === "DISPUTED" && (
+        <span className="tiny muted">
+          <Icon name="lock" size={11} /> Terenkripsi untuk pembeli, penjual & moderator. Sisa {STATEMENTS_PER_PARTY - mine} pernyataan.
+        </span>
+      )}
       {error && <span className="error">{error}</span>}
+    </div>
+  );
+}
+
+/** Satu pernyataan sengketa (didekripsi di perangkat). Pernyataan pertama pembeli memuat alasan sengketa. */
+function StatementItem({ statement, label }: { statement: DisputeStatement; label: string }) {
+  const s = useSealed<StatementContent>(statement.content);
+  return (
+    <div className="tiny" style={{ padding: "6px 8px", borderRadius: 8, background: "var(--bg-2)", whiteSpace: "pre-wrap" }}>
+      <strong>{label}</strong> · {when(statement.createdAt)}
+      {s.state === "ok" ? (
+        <>
+          {s.data.reason && s.data.reason in DISPUTE_REASONS && <div style={{ fontWeight: 700 }}>Alasan sengketa: {DISPUTE_REASONS[s.data.reason]}</div>}
+          <div>{cleanDisplayText(s.data.text, STATEMENT_MAX)}</div>
+        </>
+      ) : (
+        <div className="muted">{s.state === "loading" ? "Membuka…" : "🔒 Terenkripsi (belum dibagikan ke perangkat ini)"}</div>
+      )}
     </div>
   );
 }
 
 export function ResolutionNote({ deal }: { deal: Deal }) {
   if (!deal.resolution) return null;
+  const r = deal.resolution;
   return (
     <div className="tiny" style={{ padding: "8px 10px", borderRadius: 10, background: "color-mix(in srgb, var(--brand) 12%, transparent)" }}>
       <strong>
-        <Icon name="shieldCheck" size={12} /> Putusan: {deal.resolution.decision === "refund" ? "dana dikembalikan ke pembeli" : "dana dicairkan ke penjual"}
+        <Icon name="shieldCheck" size={12} /> Putusan {r.by === "system" ? "sistem" : "moderator"}: {r.decision === "refund" ? "dana dikembalikan ke pembeli" : "dana dicairkan ke penjual"}
       </strong>
-      <div style={{ whiteSpace: "pre-wrap" }}>{deal.resolution.reason}</div>
+      <div style={{ whiteSpace: "pre-wrap" }}>
+        {r.by === "system" ? (
+          "Sengketa tidak terselesaikan dalam batas waktu — dana yang belum pernah cair dikembalikan ke pembeli."
+        ) : (
+          <SealedText<ResolutionContent> view={r.reason} field="reason" max={500} locked="🔒 Alasan terenkripsi (belum dibagikan ke perangkat ini)" />
+        )}
+      </div>
     </div>
   );
 }
@@ -245,7 +289,7 @@ export function ModModal({ onClose }: { onClose: () => void }) {
     <Modal title="Moderasi sengketa" onClose={onClose}>
       <div className="stack">
         <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>
-          Kamu hanya melihat data kesepakatan, bukti kirim, dan pernyataan yang sengaja dikirim para pihak — <strong>bukan isi chat</strong> (terenkripsi end-to-end). Setiap putusan tercatat dan alasannya dibaca kedua pihak.
+          Kamu hanya bisa membuka judul, bukti kirim, dan pernyataan yang <strong>dienkripsi para pihak untukmu</strong> — bukan isi chat. Server pun tidak bisa membacanya. Setiap putusan tercatat; alasannya terenkripsi untuk kedua pihak.
         </p>
         {error && <span className="error">{error}</span>}
         {!q ? (
@@ -266,7 +310,9 @@ export function ModModal({ onClose }: { onClose: () => void }) {
             <div className="tiny muted" style={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em" }}>Putusan terakhir</div>
             {q.resolved.slice(0, 8).map((item) => (
               <div key={item.deal.id} className="row tiny">
-                <span className="grow truncate">{item.deal.title}</span>
+                <span className="grow truncate">
+                  <SealedText<DealContent> view={item.deal.content} field="title" max={80} locked="🔒 (judul terenkripsi)" />
+                </span>
                 <span className={`badge ${item.deal.resolution?.decision === "refund" ? "warn" : "ok"}`}>{item.deal.resolution?.decision === "refund" ? "Refund" : "Cair"}</span>
               </div>
             ))}
@@ -287,7 +333,9 @@ function ModCase({ item }: { item: ModDispute }) {
   return (
     <div className="card stack" style={{ gap: 8 }}>
       <div className="row">
-        <strong className="grow">{d.title}</strong>
+        <strong className="grow">
+          <SealedText<DealContent> view={d.content} field="title" max={80} locked="🔒 Judul belum dibagikan ke moderator" />
+        </strong>
         <span className="mono">{rupiah(d.price)}</span>
       </div>
       <div className="tiny muted">
@@ -297,17 +345,13 @@ function ModCase({ item }: { item: ModDispute }) {
         {d.autoRefundAt && ` · refund otomatis ${when(d.autoRefundAt)}`}
       </div>
       <ShipmentInfo deal={d} />
-      {d.disputeReason && <div className="tiny" style={{ fontWeight: 700 }}>Alasan: {DISPUTE_REASONS[d.disputeReason]}</div>}
       {d.statements.map((s, i) => (
-        <div key={i} className="tiny" style={{ padding: "6px 8px", borderRadius: 8, background: "var(--bg-2)", whiteSpace: "pre-wrap" }}>
-          <strong>{s.role === "buyer" ? `Pembeli (${item.buyer.alias})` : `Penjual (${item.seller.alias})`}</strong> · {when(s.createdAt)}
-          <div>{s.text}</div>
-        </div>
+        <StatementItem key={i} statement={s} label={s.role === "buyer" ? `Pembeli (${item.buyer.alias})` : `Penjual (${item.seller.alias})`} />
       ))}
       {decision ? (
         <div className="stack" style={{ gap: 6 }}>
           <label className="small" htmlFor={`reason-${d.id}`} style={{ fontWeight: 700 }}>
-            {decision === "refund" ? "Kembalikan dana ke pembeli" : "Cairkan dana ke penjual"} — alasan (dibaca kedua pihak)
+            {decision === "refund" ? "Kembalikan dana ke pembeli" : "Cairkan dana ke penjual"} — alasan (terenkripsi untuk kedua pihak)
           </label>
           <textarea id={`reason-${d.id}`} className="textarea" rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
           {error && <span className="error">{error}</span>}

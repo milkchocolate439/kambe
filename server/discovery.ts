@@ -7,6 +7,7 @@
 import type { IncomingMessage } from "node:http";
 import { tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Handler, type Row } from "./http.ts";
+import type { SealedStore } from "./sealed.ts";
 import {
   MAX_ACTIVE_ONCE,
   MAX_ACTIVE_SHADOW,
@@ -28,6 +29,7 @@ export interface DiscoveryDeps {
   cleanText: (s: string) => string;
   limit: (key: string, max: number, windowMs: number, message: string) => void;
   uniquePin: () => string;
+  sealed: SealedStore;
 }
 
 const HOUR = 60 * 60 * 1000;
@@ -35,10 +37,10 @@ const HOUR = 60 * 60 * 1000;
 export function registerDiscovery(d: DiscoveryDeps) {
   const { db, route, authed } = d;
 
-  const toShadow = (r: Row): ShadowPin => ({
+  const toShadow = (r: Row, viewerId: string): ShadowPin => ({
     pin: r.pin as string,
     kind: r.kind as ShadowPin["kind"],
-    label: r.label as string,
+    label: d.sealed.view(r.label_object as string | null, viewerId), // label terenkripsi, hanya pemilik
     createdAt: r.created_at as number,
     expiresAt: r.expires_at as number,
   });
@@ -46,13 +48,14 @@ export function registerDiscovery(d: DiscoveryDeps) {
   // ------------------------------------------------------- Shadow PIN ---
 
   route("GET", "/api/shadow-pins", authed(({ user }) => ({
-    pins: (db.prepare("SELECT * FROM shadow_pins WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC").all(user.id, Date.now()) as Row[]).map(toShadow),
+    pins: (db.prepare("SELECT * FROM shadow_pins WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC").all(user.id, Date.now()) as Row[]).map((r) => toShadow(r, user.id)),
   })));
 
   // once=true → PIN SEKALI PAKAI: hangus otomatis begitu dipakai untuk satu undangan (PIN dinamis).
+  // Label (opsional) dikirim sebagai sealed object untuk diri sendiri — server tidak bisa membacanya.
   route("POST", "/api/shadow-pins", authed(async ({ req, user }) => {
     const body = await d.readJson(req);
-    const label = d.cleanText(d.str(body, "label", { max: 80, optional: true })).slice(0, 40);
+    if (typeof body.label === "string" && body.label.trim()) throw new HttpError(400, "label_must_be_encrypted", "Label wajib terenkripsi (perbarui aplikasi)");
     const kind = body.once === true ? "once" : "shadow";
     d.limit(`shadow-create:${user.id}`, 20, 24 * HOUR, "Terlalu banyak PIN sementara dibuat hari ini.");
     const now = Date.now();
@@ -63,15 +66,27 @@ export function registerDiscovery(d: DiscoveryDeps) {
         throw new HttpError(409, "too_many_shadow", `Maksimal ${max} ${kind === "once" ? "PIN sekali pakai" : "Shadow PIN"} aktif. Cabut salah satu dulu.`);
       }
       const p = d.uniquePin();
-      db.prepare("INSERT INTO shadow_pins (pin, user_id, kind, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)").run(p, user.id, kind, label, now, now + SHADOW_TTL_MS);
+      const labelObject = body.sealedLabel ? d.sealed.store(body.sealedLabel, "label", user) : null;
+      db.prepare("INSERT INTO shadow_pins (pin, user_id, kind, label, created_at, expires_at, label_object) VALUES (?, ?, ?, '', ?, ?, ?)").run(
+        p,
+        user.id,
+        kind,
+        now,
+        now + SHADOW_TTL_MS,
+        labelObject,
+      );
       return p;
     });
-    return toShadow(db.prepare("SELECT * FROM shadow_pins WHERE pin = ?").get(pin) as Row);
+    return toShadow(db.prepare("SELECT * FROM shadow_pins WHERE pin = ?").get(pin) as Row, user.id);
   }));
 
   route("DELETE", "/api/shadow-pins/:pin", authed(({ user, params }) => {
-    const { changes } = db.prepare("DELETE FROM shadow_pins WHERE pin = ? AND user_id = ? AND kind IN ('shadow', 'once')").run(params.pin, user.id);
-    if (Number(changes) === 0) throw new HttpError(404, "not_found", "Shadow PIN tidak ditemukan");
+    const row = db.prepare("SELECT label_object FROM shadow_pins WHERE pin = ? AND user_id = ? AND kind IN ('shadow', 'once')").get(params.pin, user.id) as
+      | { label_object: string | null }
+      | undefined;
+    if (!row) throw new HttpError(404, "not_found", "Shadow PIN tidak ditemukan");
+    db.prepare("DELETE FROM shadow_pins WHERE pin = ?").run(params.pin);
+    d.sealed.remove(row.label_object);
     // Undangan yang belum diterima lewat PIN ini ikut hangus — itulah gunanya mencabut.
     db.prepare("DELETE FROM contact_requests WHERE to_id = ? AND via_pin = ?").run(user.id, params.pin);
     return { ok: true };
@@ -101,7 +116,7 @@ export function registerDiscovery(d: DiscoveryDeps) {
       const pin = existing?.pin ?? d.uniquePin();
       db.prepare("DELETE FROM shadow_pins WHERE user_id = ? AND kind = 'radar' AND pin != ?").run(user.id, pin);
       db.prepare(
-        `INSERT INTO shadow_pins (pin, user_id, kind, label, created_at, expires_at) VALUES (?, ?, 'radar', 'Radar', ?, ?)
+        `INSERT INTO shadow_pins (pin, user_id, kind, label, created_at, expires_at) VALUES (?, ?, 'radar', '', ?, ?)
          ON CONFLICT(pin) DO UPDATE SET expires_at = excluded.expires_at`,
       ).run(pin, user.id, now, expires);
       db.prepare(
@@ -150,6 +165,7 @@ export function registerDiscovery(d: DiscoveryDeps) {
 
   /** Bersihkan PIN & entri radar kedaluwarsa (dipanggil janitor). */
   function sweep(now = Date.now()) {
+    db.prepare("DELETE FROM sealed_objects WHERE id IN (SELECT label_object FROM shadow_pins WHERE expires_at <= ? AND label_object IS NOT NULL)").run(now);
     db.prepare("DELETE FROM shadow_pins WHERE expires_at <= ?").run(now);
     db.prepare("DELETE FROM radar_entries WHERE expires_at <= ?").run(now);
   }

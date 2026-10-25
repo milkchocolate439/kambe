@@ -1,6 +1,52 @@
-import { createContext, useContext, useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Messenger, State, Toast } from "../lib/messenger.ts";
+import { cleanDisplayText, type SealedView } from "../../../shared/sealed.ts";
 import { Icon } from "./icons.tsx";
+
+export type SealedState<T> = { state: "none" } | { state: "loading" } | { state: "locked" } | { state: "ok"; data: T };
+
+/**
+ * Buka isi terenkripsi di perangkat ini. "locked" = pemilik belum membagikan kunci ke kamu
+ * (mis. kontak baru — dibagikan otomatis saat pemilik online) atau isi tidak sah.
+ */
+export function useSealed<T>(view: SealedView | null | undefined): SealedState<T> {
+  const [, m] = useMessenger();
+  const key = view ? `${view.id}:${view.wrap?.wrapped ?? "-"}` : "none";
+  const [res, setRes] = useState<{ key: string; data: T | null } | null>(null);
+  useEffect(() => {
+    if (!view) return;
+    let alive = true;
+    void m.open<T>(view).then((data) => alive && setRes({ key, data }));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, m]);
+  if (!view) return { state: "none" };
+  if (!res || res.key !== key) return { state: "loading" };
+  return res.data ? { state: "ok", data: res.data } : { state: "locked" };
+}
+
+/** Tampilkan field teks dari isi terenkripsi (sudah dibersihkan dari trik tampilan). */
+export function SealedText<T extends object>({
+  view,
+  field,
+  empty = "",
+  locked = "🔒 Terenkripsi — menunggu dibagikan",
+  max = 1000,
+}: {
+  view: SealedView | null | undefined;
+  field: keyof T & string;
+  empty?: string;
+  locked?: string;
+  max?: number;
+}) {
+  const s = useSealed<T>(view);
+  if (s.state === "none") return <>{empty}</>;
+  if (s.state === "loading") return <span className="muted">…</span>;
+  if (s.state === "locked") return <span className="muted">{locked}</span>;
+  return <>{cleanDisplayText((s.data as Record<string, unknown>)[field], max) || empty}</>;
+}
 
 export const MessengerContext = createContext<Messenger | null>(null);
 

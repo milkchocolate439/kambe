@@ -37,6 +37,21 @@ import {
 import { api, ApiError } from "./api.ts";
 import { keystore, type LocalMessage, type PinnedKey } from "./keystore.ts";
 import { parseReceipt, verifyReceipt } from "../../../shared/receipt.ts";
+import { addRecipients, cleanDisplayText, openSealed, seal, type Recipient, type SealedKind, type SealedView } from "../../../shared/sealed.ts";
+import {
+  NOTE_MAX,
+  PM_MAX,
+  PRODUCT_DESC_MAX,
+  PRODUCT_TITLE_MAX,
+  STATEMENT_MAX,
+  type DealContent,
+  type DealKeys,
+  type LabelContent,
+  type ProductContent,
+  type ResolutionContent,
+  type ShipmentContent,
+  type StatementContent,
+} from "../../../shared/protocol.ts";
 
 /** Hasil verifikasi kuitansi notaris untuk satu kesepakatan. */
 export type ReceiptCheck =
@@ -286,14 +301,100 @@ export class Messenger {
     const contacts = data.contacts.map((c) => (c.id === this.state.activePeer && document.visibilityState === "visible" ? { ...c, unread: 0 } : c));
     this.set({ contacts, incoming: data.incoming, outgoing: data.outgoing, pins, keyAlerts });
     if (this.state.activePeer && !contacts.some((c) => c.id === this.state.activePeer)) this.set({ activePeer: null });
+    void this.syncShares();
   }
 
   contact(peer: string) {
     return this.state.contacts.find((c) => c.id === peer);
   }
 
+  // ------------------------------------------- isi terenkripsi (sealed) ---
+  // Semua isi selain chat/momen (status, catatan, etalase, judul kesepakatan, bukti kirim,
+  // pernyataan, alasan putusan, label) disegel di perangkat ini; server hanya melihat ciphertext.
+
+  private openCache = new Map<string, Promise<unknown>>();
+  private modKeyCache: { at: number; keys: Recipient[] } | null = null;
+  private shareSignature = "";
+
+  private get self(): Recipient {
+    return { id: this.state.me.id, publicKey: this.identity!.publicKey };
+  }
+
+  private requireDevice() {
+    if (this.state.device !== "ok" || !this.identity) throw new ApiError(409, "device", "Perangkat ini belum aktif untuk akunmu");
+  }
+
+  private sealAs(kind: SealedKind, content: unknown, recipients: Recipient[]) {
+    this.requireDevice();
+    return seal(this.identity!.privateKey, this.self, kind, content, recipients);
+  }
+
+  /** Buka isi terenkripsi untuk perangkat ini (hasil di-cache). null = belum dibagikan / tidak sah. */
+  open<T>(view: SealedView | null | undefined): Promise<T | null> {
+    if (!view || !this.identity) return Promise.resolve(null);
+    const k = `${view.id}:${view.wrap?.toKey ?? "-"}:${view.wrap?.wrapped ?? "-"}`;
+    let p = this.openCache.get(k);
+    if (!p) {
+      p = openSealed<T>(this.identity.privateKey, this.identity.publicKey, view).catch(() => null);
+      this.openCache.set(k, p);
+    }
+    return p as Promise<T | null>;
+  }
+
+  /** Kontak yang boleh menerima isi baru: punya kunci & safety number-nya TIDAK sedang berubah. */
+  private contactRecipients(): Recipient[] {
+    return this.state.contacts.filter((c) => c.publicKey && !this.state.keyAlerts[c.id]).map((c) => ({ id: c.id, publicKey: c.publicKey! }));
+  }
+
+  async modRecipients(): Promise<Recipient[]> {
+    if (this.modKeyCache && Date.now() - this.modKeyCache.at < 60_000) return this.modKeyCache.keys;
+    const { moderators } = await api<{ moderators: Recipient[] }>("GET", "/api/mod/keys");
+    this.modKeyCache = { at: Date.now(), keys: moderators };
+    return moderators;
+  }
+
+  /** Pembeli, penjual & moderator sebuah kesepakatan. */
+  private async dealRecipients(dealId: string): Promise<Recipient[]> {
+    const k = await api<DealKeys>("GET", `/api/deals/${dealId}/keys`);
+    return [k.buyer, k.seller, ...k.moderators].filter((x): x is Recipient => !!x);
+  }
+
+  /** Bagikan kunci isi milikku ke penerima yang belum punya (kontak baru, moderator baru, kunci baru). */
+  private async ensureWraps(view: SealedView | null | undefined, wanted: Recipient[]) {
+    if (!view?.wrap || !this.identity || view.ownerId !== this.state.me.id || view.ownerKey !== this.identity.publicKey) return;
+    const { recipients } = await api<{ recipients: { id: string; key: string }[] }>("GET", `/api/sealed/${view.id}/recipients`);
+    const have = new Map(recipients.map((r) => [r.id, r.key]));
+    const missing = wanted.filter((r) => r.id !== this.state.me.id && have.get(r.id) !== r.publicKey);
+    if (!missing.length) return;
+    const wraps = await addRecipients(this.identity.privateKey, this.self, view, missing);
+    await api("POST", `/api/sealed/${view.id}/wraps`, { wraps });
+  }
+
+  /** Status & etalase: pastikan semua kontak (yang kuncinya dipercaya) bisa membacanya. */
+  private async syncShares() {
+    if (this.state.device !== "ok") return;
+    const want = this.contactRecipients();
+    const sig = JSON.stringify([want, this.state.me.pm?.id, this.state.myProducts.map((p) => p.content?.id)]);
+    if (sig === this.shareSignature) return;
+    this.shareSignature = sig;
+    try {
+      await this.ensureWraps(this.state.me.pm, want);
+      for (const p of this.state.myProducts) await this.ensureWraps(p.content, want);
+    } catch {
+      this.shareSignature = ""; // coba lagi pada penyegaran berikutnya
+    }
+  }
+
   async invite(pin: string, note: string) {
-    const r = await api<{ status: "pending" | "connected" }>("POST", "/api/contacts/invite", { pin, note });
+    // Catatan undangan disegel untuk pemilik PIN; kunci publiknya diambil lewat PIN (tanpa ID internal).
+    let sealedNote;
+    const text = cleanDisplayText(note, NOTE_MAX);
+    if (text) {
+      const { publicKey } = await api<{ publicKey: string | null }>("POST", "/api/contacts/lookup", { pin });
+      if (!publicKey) throw new ApiError(409, "no_key", "Pemilik PIN belum pernah membuka PINPath, jadi catatan terenkripsi belum bisa dikirim. Kirim tanpa catatan.");
+      sealedNote = await this.sealAs("note", { text }, [{ id: "target", publicKey }]);
+    }
+    const r = await api<{ status: "pending" | "connected" }>("POST", "/api/contacts/invite", { pin, sealedNote });
     await this.refreshContacts();
     return r.status;
   }
@@ -348,8 +449,17 @@ export class Messenger {
 
   // ---------------------------------------------------------- profil ---
 
-  async updateSettings(patch: { pm?: string; readReceipts?: boolean; pinRotateDays?: number }) {
+  async updateSettings(patch: { readReceipts?: boolean; pinRotateDays?: number }) {
     const { me } = await api<{ me: Me }>("PATCH", "/api/me/settings", patch);
+    this.set({ me });
+  }
+
+  /** Status pribadi: disegel untuk semua kontak; kosong = hapus. */
+  async updateStatus(text: string) {
+    const clean = cleanDisplayText(text, PM_MAX);
+    const { me } = clean
+      ? await api<{ me: Me }>("PUT", "/api/me/status", { sealed: await this.sealAs("pm", { text: clean }, this.contactRecipients()) })
+      : await api<{ me: Me }>("DELETE", "/api/me/status");
     this.set({ me });
   }
 
@@ -450,6 +560,7 @@ export class Messenger {
     try {
       const r = await api<{ pro: ProStatus; products: Product[] }>("GET", "/api/products/mine");
       this.set({ pro: r.pro, myProducts: r.products });
+      void this.syncShares();
     } catch {
       /* tidak kritis untuk chat */
     }
@@ -462,9 +573,15 @@ export class Messenger {
     return pro;
   }
 
+  /** Nama/deskripsi/sektor disegel untuk kontak; hanya harga yang terbaca server (dasar fee). */
   async saveProduct(p: { id?: string; title: string; description: string; sector: string; price: number }) {
-    const { id, ...body } = p;
-    await api(id ? "PATCH" : "POST", id ? `/api/products/${id}` : "/api/products", body);
+    const content: ProductContent = {
+      title: cleanDisplayText(p.title, PRODUCT_TITLE_MAX),
+      description: cleanDisplayText(p.description, PRODUCT_DESC_MAX),
+      sector: p.sector,
+    };
+    const sealed = await this.sealAs("product", content, this.contactRecipients());
+    await api(p.id ? "PATCH" : "POST", p.id ? `/api/products/${p.id}` : "/api/products", { price: p.price, sealed });
     await this.loadMyStore();
     return true;
   }
@@ -546,8 +663,26 @@ export class Messenger {
       const { deals } = await api<{ deals: Deal[] }>("GET", `/api/deals?peer=${encodeURIComponent(peer)}`);
       this.set({ deals: { ...this.state.deals, [peer]: deals } });
       void this.checkReceipts(deals);
+      void this.shareDisputed(deals);
     } catch {
       /* diabaikan; dicoba lagi saat event berikutnya */
+    }
+  }
+
+  /**
+   * Sengketa berjalan: pastikan moderator SAAT INI bisa membaca isi milikku (judul, bukti kirim,
+   * pernyataan) — mis. moderator yang ditunjuk setelah kesepakatan dibuat.
+   */
+  private async shareDisputed(deals: Deal[]) {
+    for (const deal of deals.filter((d) => d.status === "DISPUTED")) {
+      try {
+        const wanted = await this.dealRecipients(deal.id);
+        await this.ensureWraps(deal.content, wanted);
+        await this.ensureWraps(deal.shipment, wanted);
+        for (const s of deal.statements) await this.ensureWraps(s.content, wanted);
+      } catch {
+        /* dicoba lagi saat dimuat ulang */
+      }
     }
   }
 
@@ -558,20 +693,38 @@ export class Messenger {
     void this.checkReceipts([deal]);
   }
 
-  async createDeal(peer: string, productId: string, idempotencyKey: string) {
-    const deal = await api<Deal>("POST", "/api/deals", { productId, idempotencyKey });
+  /** Lawan transaksi sebagai penerima (harus kontak dengan kunci yang dipercaya). */
+  private counterpart(peer: string): Recipient {
+    const c = this.contact(peer);
+    if (!c?.publicKey) throw new ApiError(409, "no_key", "Lawan transaksi belum punya kunci perangkat");
+    if (this.state.keyAlerts[peer]) throw new ApiError(409, "key_alert", "Safety number lawan transaksi berubah — tinjau dulu sebelum bertransaksi");
+    return { id: c.id, publicKey: c.publicKey };
+  }
+
+  /** Judul kesepakatan disegel untuk penjual & moderator (diambil dari isi produk yang sudah didekripsi). */
+  async createDeal(peer: string, productId: string, idempotencyKey: string, title: string) {
+    const content: DealContent = { title: cleanDisplayText(title, PRODUCT_TITLE_MAX) };
+    const sealed = await this.sealAs("deal", content, [this.counterpart(peer), ...(await this.modRecipients())]);
+    const deal = await api<Deal>("POST", "/api/deals", { productId, idempotencyKey, sealed });
     this.upsertDeal(peer, deal);
     return deal;
   }
 
   async offerDeal(peer: string, title: string, price: number, idempotencyKey: string) {
-    const deal = await api<Deal>("POST", "/api/deals/offer", { buyerId: peer, title, price, idempotencyKey });
+    const content: DealContent = { title: cleanDisplayText(title, PRODUCT_TITLE_MAX) };
+    const sealed = await this.sealAs("deal", content, [this.counterpart(peer), ...(await this.modRecipients())]);
+    const deal = await api<Deal>("POST", "/api/deals/offer", { buyerId: peer, price, idempotencyKey, sealed });
     this.upsertDeal(peer, deal);
     return deal;
   }
 
-  /** `body` wajib untuk "ship" (bukti kirim) dan "dispute" (alasan + cerita). */
-  async dealAction(peer: string, dealId: string, action: DealAction, body?: Record<string, string>) {
+  /** "ship" butuh bukti kirim, "dispute" butuh cerita — keduanya disegel untuk pembeli, penjual & moderator. */
+  async dealAction(peer: string, dealId: string, action: DealAction, content?: ShipmentContent | StatementContent) {
+    let body: Record<string, unknown> | undefined;
+    if (action === "ship" || action === "dispute") {
+      if (!content) throw new ApiError(400, "content_required", action === "ship" ? "Bukti kirim wajib diisi" : "Ceritakan masalahnya");
+      body = { sealed: await this.sealAs(action === "ship" ? "shipment" : "statement", content, await this.dealRecipients(dealId)) };
+    }
     const deal = await api<Deal>("POST", `/api/deals/${dealId}/${action}`, body);
     this.upsertDeal(peer, deal);
     if (this.state.wallet) void this.loadWallet();
@@ -579,7 +732,9 @@ export class Messenger {
   }
 
   async addStatement(peer: string, dealId: string, text: string) {
-    const deal = await api<Deal>("POST", `/api/deals/${dealId}/statements`, { text });
+    const content: StatementContent = { text: cleanDisplayText(text, STATEMENT_MAX) };
+    const sealed = await this.sealAs("statement", content, await this.dealRecipients(dealId));
+    const deal = await api<Deal>("POST", `/api/deals/${dealId}/statements`, { sealed });
     this.upsertDeal(peer, deal);
     return deal;
   }
@@ -659,8 +814,11 @@ export class Messenger {
     this.set({ shadowPins: (await api<{ pins: ShadowPin[] }>("GET", "/api/shadow-pins")).pins });
   }
 
+  /** Label hanya untukku → disegel untuk diri sendiri saja (server tidak bisa membacanya). */
   async createShadowPin(label: string, once = false) {
-    const pin = await api<ShadowPin>("POST", "/api/shadow-pins", { label, once });
+    const text = cleanDisplayText(label, 40);
+    const sealedLabel = text ? await this.sealAs("label", { text } satisfies LabelContent, []) : undefined;
+    const pin = await api<ShadowPin>("POST", "/api/shadow-pins", { once, sealedLabel });
     await this.loadShadowPins();
     return pin;
   }
@@ -693,8 +851,11 @@ export class Messenger {
     this.set({ modQueue: await api<{ open: ModDispute[]; resolved: ModDispute[] }>("GET", "/api/mod/disputes") });
   }
 
+  /** Keputusan terbaca server (untuk memindahkan dana); ALASAN disegel untuk pembeli, penjual & moderator. */
   async resolveDispute(dealId: string, decision: "refund" | "release", reason: string) {
-    await api("POST", `/api/mod/disputes/${dealId}/resolve`, { decision, reason });
+    const content: ResolutionContent = { reason: cleanDisplayText(reason, 500) };
+    const sealed = await this.sealAs("resolution", content, await this.dealRecipients(dealId));
+    await api("POST", `/api/mod/disputes/${dealId}/resolve`, { decision, sealed });
     await this.loadModQueue();
   }
 
@@ -866,6 +1027,10 @@ export class Messenger {
         break;
       case "mod_queue_changed":
         if (this.state.modQueue) await this.loadModQueue().catch(() => {});
+        break;
+      case "reshare_needed":
+        this.modKeyCache = null;
+        await this.loadDeals(ev.peer); // memicu shareDisputed ke kunci moderator yang baru
         break;
       case "products_changed":
         if (ev.owner === this.state.me.id) await this.loadMyStore();

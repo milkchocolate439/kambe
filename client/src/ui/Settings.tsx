@@ -1,13 +1,41 @@
 import { useEffect, useState } from "react";
-import { PM_MAX } from "../../../shared/protocol.ts";
+import { PM_MAX, type PmContent } from "../../../shared/protocol.ts";
 import { api, ApiError } from "../lib/api.ts";
 import { keystore } from "../lib/keystore.ts";
-import { Modal, Switch, useMessenger } from "./common.tsx";
+import { Modal, Switch, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+
+type Run = (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
+
+/** Status pribadi: dibuka (didekripsi) dulu di perangkat, lalu disegel ulang untuk kontak saat disimpan. */
+function PmEditor({ run, busy }: { run: Run; busy: boolean }) {
+  const [s] = useMessenger();
+  const cur = useSealed<PmContent>(s.me.pm);
+  if (cur.state === "loading") return <div className="hint">Membuka status terenkripsi…</div>;
+  return <PmForm key={s.me.pm?.id ?? "kosong"} initial={cur.state === "ok" ? cur.data.text : ""} run={run} busy={busy} />;
+}
+
+function PmForm({ initial, run, busy }: { initial: string; run: Run; busy: boolean }) {
+  const [, m] = useMessenger();
+  const [pm, setPm] = useState(initial);
+  return (
+    <div className="field">
+      <label htmlFor="pm">Status pribadi (ala BBM)</label>
+      <div className="row">
+        <input id="pm" className="input grow" maxLength={PM_MAX} value={pm} onChange={(e) => setPm(e.target.value)} placeholder="mis. Cari supplier kopi" />
+        <button className="btn" disabled={busy || pm === initial} onClick={() => void run(() => m.updateStatus(pm), pm.trim() ? "Status disimpan (terenkripsi)" : "Status dihapus")}>
+          Simpan
+        </button>
+      </div>
+      <span className="hint">
+        <Icon name="lock" size={12} /> Terenkripsi end-to-end — hanya kontakmu yang bisa membacanya.
+      </span>
+    </div>
+  );
+}
 
 export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSignedOut: (reason: string) => void }) {
   const [s, m] = useMessenger();
-  const [pm, setPm] = useState(s.me.pm);
   const [blocked, setBlocked] = useState<{ id: string; alias: string }[] | null>(null);
   const [danger, setDanger] = useState<null | "delete">(null);
   const [pass, setPass] = useState("");
@@ -34,16 +62,7 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
   return (
     <Modal title="Pengaturan & privasi" onClose={onClose}>
       <div className="stack" style={{ gap: 16 }}>
-        <div className="field">
-          <label htmlFor="pm">Status pribadi (ala BBM)</label>
-          <div className="row">
-            <input id="pm" className="input grow" maxLength={PM_MAX} value={pm} onChange={(e) => setPm(e.target.value)} placeholder="mis. Cari supplier kopi" />
-            <button className="btn" disabled={busy || pm === s.me.pm} onClick={() => void run(() => m.updateSettings({ pm }), "Status disimpan")}>
-              Simpan
-            </button>
-          </div>
-          <span className="hint">Terlihat oleh kontak yang sudah terhubung (tidak terenkripsi end-to-end).</span>
-        </div>
+        <PmEditor run={run} busy={busy} />
 
         <div className="row">
           <div className="grow">
