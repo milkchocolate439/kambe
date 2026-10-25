@@ -1,0 +1,14 @@
+{
+  "name": "PINPath",
+  "short_name": "PINPath",
+  "description": "Messenger berbasis PIN dengan enkripsi end-to-end.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050811",
+  "theme_color": "#050811",
+  "lang": "id",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

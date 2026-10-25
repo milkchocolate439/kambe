@@ -1,0 +1,35 @@
+{
+  "name": "pinpath",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PINPath — messenger berbasis PIN dengan enkripsi end-to-end (E2EE); server hanya melihat ciphertext.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"node --import tsx --watch server/index.ts\" \"vite\"",
+    "build": "tsc -b && vite build",
+    "start": "NODE_ENV=production node --import tsx server/index.ts",
+    "typecheck": "tsc -b",
+    "test": "node --import tsx --test --test-timeout=30000 --test-force-exit tests/*.test.ts",
+    "test:browser": "node --import tsx tests/browser/e2e.ts && node --import tsx tests/browser/commerce-e2e.ts"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "ws": "^8.18.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.5.0",
+    "concurrently": "^9.1.2",
+    "playwright-core": "^1.53.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
