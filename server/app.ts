@@ -32,6 +32,7 @@ import {
   PING_COOLDOWN_MS,
   PM_MAX,
   UUID_RE,
+  FEE_PER_MILLE,
   PIN_ROTATE_OPTIONS,
   type PinRotateDays,
   type ShadowKind,
@@ -59,7 +60,7 @@ export interface AppOptions {
   moderators?: string[];
   /** Kunci privat Ed25519 notaris kuitansi. Kosong = kunci sementara (hanya untuk tes). */
   notaryKey?: KeyObject;
-  /** Fee platform per seribu (default 25 = 2,5%; maks. 200 = 20%). */
+  /** Fee platform per seribu (default 50 = 5%; maks. 200 = 20%). */
   feePerMille?: number;
   /** Penyedia pembayaran. Default: simulasi (tanpa uang sungguhan). */
   payments?: PaymentProvider;
@@ -119,7 +120,7 @@ export function createApp(opts: AppOptions) {
   }
   const isModerator = (u: UserRow) => moderatorIdSet.has(u.id);
   const notary = createNotary(opts.notaryKey);
-  const feePerMille = opts.feePerMille ?? 25;
+  const feePerMille = opts.feePerMille ?? FEE_PER_MILLE;
   if (!Number.isInteger(feePerMille) || feePerMille < 0 || feePerMille > 200) throw new Error("feePerMille harus bilangan bulat 0–200 (0%–20%)");
 
   function toMe(u: UserRow): Me {

@@ -1,6 +1,7 @@
 // Fase 2 — etalase, kesepakatan rekber, identitas terenkripsi, dompet. SEMUA SIMULASI.
 import { useEffect, useMemo, useState } from "react";
 import {
+  FEE_PER_MILLE,
   PRICE_MAX,
   PRICE_MIN,
   PRODUCT_DESC_MAX,
@@ -525,7 +526,7 @@ function ProTab() {
         <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18, color: "var(--text-2)" }}>
           <li>Buka etalase produk/jasa untuk kontakmu</li>
           <li>Tawarkan kesepakatan rekber langsung dari chat</li>
-          <li>Fee {((s.config?.feePerMille ?? 25) / 10).toLocaleString("id-ID")}% hanya dipotong saat dana cair (tidak saat refund)</li>
+          <li>Fee {((s.config?.feePerMille ?? FEE_PER_MILLE) / 10).toLocaleString("id-ID")}% hanya dipotong saat dana cair (tidak saat refund)</li>
         </ul>
       </div>
       {pro?.active ? (

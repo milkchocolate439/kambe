@@ -172,7 +172,7 @@ export type ServerEvent =
 
 export const PRO_PRICE = 49_000;
 export const PRO_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
-export const FEE_PER_MILLE = 25; // 2,5%
+export const FEE_PER_MILLE = 50; // 5% — keputusan pemilik produk (bisa diubah: PINPATH_FEE_PER_MILLE)
 export const PRICE_MIN = 1_000;
 export const PRICE_MAX = 100_000_000;
 export const PRODUCT_TITLE_MAX = 80;
@@ -180,7 +180,7 @@ export const PRODUCT_DESC_MAX = 500;
 export const MAX_PRODUCTS = 50;
 export const SECTORS = ["Komoditas & Pangan", "Jasa Digital & IT", "Desain & Kreatif", "Logistik & B2B", "Lainnya"] as const;
 
-/** Fee platform (default 2,5%) dibulatkan ke rupiah terdekat (setengah ke atas) — aritmetika bilangan bulat. */
+/** Fee platform (default 5%) dibulatkan ke rupiah terdekat (setengah ke atas) — aritmetika bilangan bulat. */
 export function platformFee(price: number, perMille: number = FEE_PER_MILLE): number {
   return Math.floor((price * perMille + 500) / 1000);
 }

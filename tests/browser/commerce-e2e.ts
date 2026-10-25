@@ -148,8 +148,8 @@ async function main() {
     check(true, "rantai kuitansi #0→#3 sah di kedua perangkat");
     await seller.getByRole("button", { name: "Toko & Dompet" }).click();
     await seller.getByRole("tab", { name: "Dompet" }).click();
-    await seller.getByText("Rp828.750").first().waitFor();
-    check(true, "saldo penjual = harga − fee 2,5% (Rp828.750)");
+    await seller.getByText("Rp807.500").first().waitFor();
+    check(true, "saldo penjual = harga − fee 5% (Rp807.500)");
     await seller.screenshot({ path: join(OUT, "c2-seller-wallet.png") });
     await seller.keyboard.press("Escape");
 
@@ -157,7 +157,7 @@ async function main() {
     await seller.getByRole("button", { name: "Tawarkan kesepakatan rekber" }).click();
     await seller.getByLabel("Barang / jasa").fill("Roasting kustom 2 Kg");
     await seller.getByLabel("Harga").fill("320000");
-    check(await seller.getByText("Kamu menerima Rp312.000").isVisible(), "pratinjau dana bersih untuk penjual");
+    check(await seller.getByText("Kamu menerima Rp304.000").isVisible(), "pratinjau dana bersih untuk penjual (fee 5%)");
     await seller.getByRole("button", { name: "Kirim tawaran" }).click();
     await buyer.locator(".deal-card", { hasText: "Roasting kustom 2 Kg" }).getByText("Menunggu pembayaran").waitFor();
     check(true, "tawaran kustom muncul real-time di chat pembeli");

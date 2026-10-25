@@ -123,7 +123,7 @@ test("moderator memutus release: penjual dibayar dengan fee normal", async () =>
   const { app, seller, mod, deal } = await disputedMarket();
   const out = (await mod.post(`/api/mod/disputes/${deal.id}/resolve`, { decision: "release", reason: "Resi valid dan foto timbang cocok dengan deskripsi." })).body;
   assert.equal(out.deal.status, "COMPLETED");
-  assert.equal((await seller.get("/api/wallet")).body.balance, 828_750);
+  assert.equal((await seller.get("/api/wallet")).body.balance, 807_500);
   assert.equal(app.audit().balanced, true);
   await app.close();
 });

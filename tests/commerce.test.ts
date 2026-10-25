@@ -24,12 +24,19 @@ async function market(opts: { dealTimers?: Partial<DealTimers> } = {}) {
   return { ...env, seller, buyer, s: s.me, b: b.me, prod };
 }
 
-test("fee 2,5% dihitung dengan bilangan bulat dan pembulatan setengah ke atas", () => {
-  assert.equal(platformFee(1_000), 25);
-  assert.equal(platformFee(1_019), 25); // 25,475 → 25
-  assert.equal(platformFee(1_020), 26); // 25,5 → 26
-  assert.equal(platformFee(850_000), 21_250);
-  assert.equal(platformFee(100_000_000), 2_500_000);
+test("fee default 5%: bilangan bulat, pembulatan setengah ke atas", () => {
+  assert.equal(platformFee(1_000), 50);
+  assert.equal(platformFee(1_009), 50); // 50,45 → 50
+  assert.equal(platformFee(1_010), 51); // 50,5  → 51
+  assert.equal(platformFee(850_000), 42_500);
+  assert.equal(platformFee(100_000_000), 5_000_000);
+});
+
+test("tarif lain tetap bisa dipakai (mis. 2,5%) dengan pembulatan yang sama", () => {
+  assert.equal(platformFee(1_000, 25), 25);
+  assert.equal(platformFee(1_019, 25), 25); // 25,475 → 25
+  assert.equal(platformFee(1_020, 25), 26); // 25,5 → 26
+  assert.equal(platformFee(850_000, 25), 21_250);
 });
 
 test("PRO: etalase terkunci untuk pengguna gratis; langganan idempoten", async () => {
@@ -83,25 +90,25 @@ test("alur rekber lengkap: harga dari server, dana ditahan, cair setelah konfirm
   // Klien jahat mencoba mengirim harga sendiri — diabaikan, server memakai harga produk.
   const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key(), price: 1, fee: 0 })).body;
   assert.equal(deal.price, 850_000);
-  assert.equal(deal.fee, 21_250);
-  assert.equal(deal.sellerNet, 828_750);
+  assert.equal(deal.fee, 42_500); // 5%
+  assert.equal(deal.sellerNet, 807_500);
   assert.deepEqual(deal.actions.sort(), ["cancel", "pay"]);
 
   const paid = (await buyer.post(`/api/deals/${deal.id}/pay`)).body;
   assert.equal(paid.status, "HELD");
   assert.equal((await buyer.get("/api/wallet")).body.outgoingHeld, 850_000);
-  assert.equal((await seller.get("/api/wallet")).body.incomingHeld, 828_750);
+  assert.equal((await seller.get("/api/wallet")).body.incomingHeld, 807_500);
   assert.equal((await seller.get("/api/wallet")).body.balance, 0, "dana belum cair sebelum dikonfirmasi");
 
   assert.equal((await seller.post(`/api/deals/${deal.id}/ship`, SHIP)).body.status, "SHIPPED");
   const done = (await buyer.post(`/api/deals/${deal.id}/confirm`)).body;
   assert.equal(done.status, "COMPLETED");
   assert.deepEqual(done.actions, []);
-  assert.equal((await seller.get("/api/wallet")).body.balance, 828_750);
+  assert.equal((await seller.get("/api/wallet")).body.balance, 807_500);
   const audit = app.audit();
   assert.equal(audit.balanced, true);
   assert.equal(audit.escrow, 0);
-  assert.equal(audit.platform, PRO_PRICE + 21_250);
+  assert.equal(audit.platform, PRO_PRICE + 42_500);
   await app.close();
 });
 
@@ -159,7 +166,7 @@ test("refund & sengketa: dana kembali utuh tanpa fee; sengketa bisa diselesaikan
 
   const audit = app.audit();
   assert.equal(audit.balanced, true);
-  assert.equal(audit.platform, PRO_PRICE + 21_250, "refund tidak memotong fee");
+  assert.equal(audit.platform, PRO_PRICE + 42_500, "refund tidak memotong fee");
   await app.close();
 });
 
@@ -172,7 +179,7 @@ test("pencairan otomatis setelah dikirim bila pembeli diam (penjual tidak tersan
   assert.equal(shipped.autoRefundAt, null, "setelah dikirim tidak ada refund otomatis");
   assert.equal(app.runTimers(shipped.shippedAt + 10).released, 0, "belum waktunya");
   assert.equal(app.runTimers(shipped.shippedAt + 60).released, 1);
-  assert.equal((await seller.get("/api/wallet")).body.balance, 828_750);
+  assert.equal((await seller.get("/api/wallet")).body.balance, 807_500);
   assert.equal(app.runTimers(shipped.shippedAt + 120).released, 0, "tidak dicairkan dua kali");
   assert.equal(app.audit().balanced, true);
   await app.close();
@@ -274,7 +281,7 @@ test("tawaran kustom dari chat: hanya penjual PRO, ke kontak sendiri", async () 
   const { app, base, seller, buyer, s, b } = await market();
   const offer = (await seller.post("/api/deals/offer", { buyerId: b.id, title: "Roasting kustom 2 Kg", price: 320_000, idempotencyKey: key() })).body;
   assert.equal(offer.buyerId, b.id);
-  assert.equal(offer.fee, 8_000);
+  assert.equal(offer.fee, 16_000); // 5% dari 320.000
   assert.deepEqual((await buyer.get(`/api/deals?peer=${s.id}`)).body.deals[0].actions.sort(), ["cancel", "pay"]);
   assert.equal((await buyer.post("/api/deals/offer", { buyerId: s.id, title: "Balik menawar", price: 1000, idempotencyKey: key() })).status, 403, "pembeli non-PRO tak bisa menawarkan");
   const stranger = new Client(base);

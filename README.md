@@ -28,7 +28,7 @@ Variabel lingkungan (opsional):
 | `PINPATH_SECURE` | – | `1` di balik HTTPS → cookie `Secure` + HSTS |
 | `PINPATH_TRUST_PROXY` | – | `1` hanya bila di belakang reverse proxy milik sendiri |
 | `PINPATH_ORIGINS` | – | Daftar Origin yang diizinkan (koma). Kosong = harus sama dengan Host |
-| `PINPATH_FEE_PER_MILLE` | `25` | Fee platform per seribu (25 = 2,5%, 50 = 5%; maks. 200). Tersimpan per kesepakatan saat dibuat |
+| `PINPATH_FEE_PER_MILLE` | `50` | Fee platform per seribu (**default 50 = 5%**; 25 = 2,5%; maks. 200). Tersimpan per kesepakatan saat dibuat |
 | `PINPATH_NOTARY_KEY` / `PINPATH_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
 | `PINPATH_PAYMENT_PROVIDER` | `simulasi` | `xendit` untuk gateway nyata (butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `PINPATH_PUBLIC_URL`, opsional `XENDIT_SPLIT_RULE_ID`) |
 | `VITE_NOTARY_PUBLIC_KEY` | – | (saat build) kunci publik notaris yang ditanam di aplikasi/APK; tanpa ini klien mem-pin kunci saat pertama terlihat |
@@ -85,7 +85,7 @@ dan apakah sebuah pesan adalah PING (untuk rate limit). Catatan undangan tidak t
 
 - **PRO Rp49.000/bln** (divalidasi server, idempoten): membuka etalase & tawaran kesepakatan dari chat.
 - **Etalase hanya untuk kontak** yang sudah disetujui (bukan publik).
-- **Alur rekber**: `AWAITING_PAYMENT → HELD (dana ditahan) → SHIPPED → COMPLETED (dana cair, fee 2,5%)`.
+- **Alur rekber**: `AWAITING_PAYMENT → HELD (dana ditahan) → SHIPPED → COMPLETED (dana cair, fee 5%)`.
   Pembatalan sebelum bayar; penjual bisa refund penuh tanpa fee; pembeli bisa sengketa (menghentikan pencairan otomatis).
 - **Tenggat anti-sandera (kedua arah)** — dana tidak pernah bisa terkunci selamanya:
 

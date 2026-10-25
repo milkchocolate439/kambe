@@ -61,7 +61,7 @@ export interface CommerceDeps {
   isModerator: (u: UserRow) => boolean;
   moderatorIds: () => string[];
   notary: Notary;
-  /** Fee platform per seribu (25 = 2,5%). Disalin ke setiap kesepakatan saat dibuat. */
+  /** Fee platform per seribu (50 = 5%). Disalin ke setiap kesepakatan saat dibuat. */
   feePerMille: number;
   payments: PaymentProvider;
   readRaw: (req: IncomingMessage, maxBytes?: number) => Promise<string>;

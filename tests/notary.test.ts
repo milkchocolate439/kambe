@@ -30,7 +30,7 @@ test("setiap perubahan status menerbitkan kuitansi notaris yang sah & berantai",
   const { app, base, seller, buyer, deal } = await dealFlow();
   const cfg = (await fetch(base + "/api/config").then((r) => r.json())) as { notaryPublicKey: string; feePerMille: number };
   assert.equal(cfg.notaryPublicKey, app.notaryPublicKey);
-  assert.equal(cfg.feePerMille, 25);
+  assert.equal(cfg.feePerMille, 50, "default 5%");
 
   assert.equal(parseReceipt(deal.receipt).seq, 0);
   assert.equal(parseReceipt(deal.receipt).status, "AWAITING_PAYMENT");
@@ -43,8 +43,8 @@ test("setiap perubahan status menerbitkan kuitansi notaris yang sah & berantai",
   assert.equal(last.seq, 3);
   assert.equal(last.status, "COMPLETED");
   assert.equal(last.price, 200_000);
-  assert.equal(last.fee, 5_000);
-  assert.equal(last.sellerNet, 195_000);
+  assert.equal(last.fee, 10_000); // 5% dari 200.000
+  assert.equal(last.sellerNet, 190_000);
   assert.equal(last.payRef, done.payRef);
 
   const chain = (await buyer.get(`/api/deals/${deal.id}/receipts`)).body.receipts as SignedReceipt[];
@@ -86,20 +86,21 @@ test("kuitansi hanya untuk pihak terkait; kode bayar sekali pakai tanpa identita
 });
 
 test("fee dapat diatur lewat konfigurasi; tarif tidak masuk akal ditolak saat start", async () => {
-  const app = createApp({ dbPath: ":memory:", feePerMille: 50 });
+  // Default kini 5%; buktikan konfigurasi dengan nilai lain (2,5%).
+  const app = createApp({ dbPath: ":memory:", feePerMille: 25 });
   await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", () => r()));
   const base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;
   const seller = new Client(base);
   const buyer = new Client(base);
-  const s = await seller.signup("Penjual_5persen");
-  await buyer.signup("Pembeli_5persen");
+  const s = await seller.signup("Penjual_Tarif");
+  await buyer.signup("Pembeli_Tarif");
   await buyer.post("/api/contacts/invite", { pin: s.me.pin });
   await seller.post(`/api/contacts/requests/${(await seller.get("/api/contacts")).body.incoming[0].id}/accept`);
   await seller.post("/api/pro/subscribe", { idempotencyKey: key() });
   const prod = (await seller.post("/api/products", { title: "Jasa desain", sector: "Desain & Kreatif", price: 100_000 })).body;
   const deal = (await buyer.post("/api/deals", { productId: prod.id, idempotencyKey: key() })).body;
-  assert.equal(deal.fee, 5_000, "5% sesuai konfigurasi");
-  assert.equal((await fetch(base + "/api/config").then((r) => r.json()) as { feePerMille: number }).feePerMille, 50);
+  assert.equal(deal.fee, 2_500, "2,5% sesuai konfigurasi");
+  assert.equal((await fetch(base + "/api/config").then((r) => r.json()) as { feePerMille: number }).feePerMille, 25);
   await app.close();
   assert.throws(() => createApp({ dbPath: ":memory:", feePerMille: 500 }), /0–200/);
 });
