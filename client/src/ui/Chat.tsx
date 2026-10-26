@@ -10,6 +10,9 @@ type TimelineItem = { t: "msg"; at: number; msg: ChatMessage } | { t: "deal"; at
 
 const MAX_CHARS = 4000;
 
+// Panel emoji tema "The Mask" — daftar favorit statis, tanpa pustaka emoji eksternal.
+const EMOJI_FAVORITES = ["😍", "💕", "😊", "🎉", "🎇", "😜", "👏", "🎶", "😎", "🤢", "👀", "✔️", "🎁", "💖", "🙌", "😂", "🙏", "👍", "❤️", "🔥", "😭", "🤝", "🔒", "🤫"];
+
 // Deteksi pola penipuan umum — berjalan HANYA di perangkat, setelah pesan didekripsi.
 const SCAM_PATTERNS: [RegExp, string][] = [
   [/\b(otp|kode\s*(verifikasi|otp|aktivasi)|pin\s*atm|cvv)\b/i, "Jangan pernah membagikan OTP, PIN ATM, atau kode verifikasi kepada siapa pun."],
@@ -33,11 +36,15 @@ export function Chat() {
   const [menu, setMenu] = useState<null | "menu" | "remove" | "block">(null);
   const [shop, setShop] = useState<null | "catalog" | "offer" | "upgrade">(null);
   const [shake, setShake] = useState(false);
+  const [emoji, setEmoji] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
 
-  useEffect(() => setText(""), [peer]);
+  useEffect(() => {
+    setText("");
+    setEmoji(false);
+  }, [peer]);
 
   // PING!!! dari kontak yang sedang dibuka → layar bergetar.
   useEffect(() => {
@@ -90,7 +97,24 @@ export function Chat() {
     inputRef.current?.focus();
   }
 
+  // Sisipkan emoji di posisi kursor (bukan selalu di akhir), lalu kembalikan fokus ke kotak ketik
+  function insertEmoji(e: string) {
+    const el = inputRef.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    setText((text.slice(0, start) + e + text.slice(end)).slice(0, MAX_CHARS + 200));
+    requestAnimationFrame(() => {
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(start + e.length, start + e.length);
+    });
+  }
+
   function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Escape" && emoji) {
+      setEmoji(false);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && matchMedia("(pointer: fine)").matches) {
       e.preventDefault();
       void send();
@@ -215,6 +239,30 @@ export function Chat() {
         >
           <Icon name="handshake" />
         </button>
+        <button
+          type="button"
+          className={`btn icon ${emoji ? "on" : ""}`}
+          onClick={() => setEmoji((v) => !v)}
+          disabled={!!blocker}
+          aria-label="Emoji"
+          aria-expanded={emoji}
+          aria-controls="emoji-panel"
+          title="Emoji"
+        >
+          <Icon name="smile" />
+        </button>
+        {emoji && !blocker && (
+          <div className="emoji-panel" id="emoji-panel" role="group" aria-label="Emoji favorit">
+            <div className="emoji-head">Favorit</div>
+            <div className="emoji-grid">
+              {EMOJI_FAVORITES.map((e) => (
+                <button key={e} type="button" className="emoji-btn" onClick={() => insertEmoji(e)} aria-label={`Sisipkan ${e}`}>
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="grow stack" style={{ gap: 4 }}>
           <textarea
             ref={inputRef}

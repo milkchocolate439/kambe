@@ -56,14 +56,13 @@ export function useMessenger(): [State, Messenger] {
   return [useSyncExternalStore(m.subscribe, m.getState), m];
 }
 
-const COLORS = ["#4f46e5", "#db2777", "#0891b2", "#059669", "#d97706", "#7c3aed", "#e11d48", "#2563eb"];
-
+// Tema "The Mask": semua avatar berbentuk lencana bulat hijau; pembedanya inisial dan sudut kilau.
 export function Avatar({ id, name, size = 42 }: { id: string; name: string; size?: number }) {
   let h = 0;
   for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   const initials = name.replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase() || "?";
   return (
-    <div className="avatar" style={{ background: COLORS[h % COLORS.length], width: size, height: size }} aria-hidden="true">
+    <div className="avatar" style={{ width: size, height: size, ["--glint" as string]: `${h % 360}deg` }} aria-hidden="true">
       {initials}
     </div>
   );

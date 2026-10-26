@@ -25,7 +25,7 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
     <div className="app">
       <header className="topbar">
         <div className="logo" aria-hidden="true">
-          <Icon name="fingerprint" />
+          <Icon name="mask" />
         </div>
         <span className="brand hide-mobile">PINPath</span>
         <button

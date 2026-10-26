@@ -50,7 +50,7 @@ function MyPinCard() {
   }
 
   return (
-    <section className="card">
+    <section className="card hero-card">
       <div className="row">
         <Avatar id={s.me.id} name={s.me.alias} size={46} />
         <div className="grow">
@@ -60,30 +60,38 @@ function MyPinCard() {
           </div>
         </div>
       </div>
-      <div className="divider" style={{ margin: "12px 0" }} />
-      <div className="tiny muted" style={{ textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>PIN kamu</div>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <button className="pin-big" style={{ background: "none", border: 0, padding: 0 }} onClick={copy} aria-label={`Salin PIN ${s.me.pin}`}>
+      <div className="hero-mark compact">
+        <Icon name="mask" size={34} strokeWidth={1.6} />
+        <div className="hero-name">PINPath</div>
+        <div className="hero-title">Mulai Obrolan Rahasia</div>
+      </div>
+      <div className="id-card">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <span className="small">PIN untuk dibagikan:</span>
+          <div className="row" style={{ gap: 6 }}>
+            {"share" in navigator && (
+              <button className="btn ghost icon round" onClick={share} aria-label="Bagikan PIN" title="Bagikan PIN">
+                <Icon name="share" />
+              </button>
+            )}
+            <button className="btn soft small" onClick={copy} aria-label="Salin PIN" title="Salin PIN">
+              <Icon name="copy" size={15} /> Salin
+            </button>
+          </div>
+        </div>
+        <button className="pin-big" onClick={copy} aria-label={`Salin PIN ${s.me.pin}`}>
           {s.me.pin}
         </button>
-        <div className="row" style={{ gap: 4 }}>
-          <button className="btn ghost icon" onClick={copy} aria-label="Salin PIN" title="Salin PIN">
-            <Icon name="copy" />
-          </button>
-          {"share" in navigator && (
-            <button className="btn ghost icon" onClick={share} aria-label="Bagikan PIN" title="Bagikan PIN">
-              <Icon name="share" />
-            </button>
-          )}
-          <button className="btn ghost icon" onClick={() => setConfirmRotate(true)} aria-label="Ganti PIN" title="Ganti PIN (kalau kena spam)">
-            <Icon name="refresh" />
-          </button>
-        </div>
       </div>
       <div className="hint">PIN hanya untuk berbagi kontak — bukan kata sandi. Orang lain harus kamu setujui dulu.</div>
-      <button className="btn small block" style={{ marginTop: 10 }} onClick={() => setShadow(true)}>
-        <Icon name="clock" size={15} /> Shadow PIN sementara (24 jam)
-      </button>
+      <div className="row" style={{ marginTop: 10 }}>
+        <button className="btn small grow" onClick={() => setShadow(true)}>
+          <Icon name="clock" size={15} /> Shadow PIN 24 jam
+        </button>
+        <button className="btn small" onClick={() => setConfirmRotate(true)} aria-label="Ganti PIN" title="Ganti PIN (kalau kena spam)">
+          <Icon name="refresh" size={15} /> Ganti
+        </button>
+      </div>
       {shadow && <ShadowPinModal onClose={() => setShadow(false)} />}
 
       {confirmRotate && (
@@ -133,29 +141,28 @@ function InviteCard() {
 
   return (
     <section className="card">
+      <div className="or-divider" aria-hidden="true">atau</div>
       <h3>
         <Icon name="userPlus" size={14} /> Hubungkan via PIN
       </h3>
       <form className="stack" onSubmit={submit}>
-        <div className="row">
+        <label className="contact-field">
+          <span>PIN kontak</span>
           <input
-            className="input pin grow"
+            className="input pin"
             value={pin}
             onChange={(e) => {
               setPin(e.target.value.slice(0, 9));
               setError(null);
             }}
-            placeholder="PIN 6 karakter"
+            placeholder="Ketik di sini"
             aria-label="PIN tujuan"
             autoCapitalize="characters"
             autoComplete="off"
             spellCheck={false}
             inputMode="text"
           />
-          <button className="btn primary" disabled={busy || !normalized}>
-            {busy ? "…" : "Undang"}
-          </button>
-        </div>
+        </label>
         {normalized.length >= 6 && problem && <span className="error">{problem}</span>}
         <input
           className="input"
@@ -164,10 +171,16 @@ function InviteCard() {
           placeholder="Catatan singkat (opsional), mis. mau tanya stok kopi"
           aria-label="Catatan undangan"
         />
+        <span className="hint center">
+          Mulai obrolan baru dengan memasukkan PIN seseorang, atau <span className="accent">bagikan PIN-mu</span> kepadanya.
+        </span>
+        {error && <span className="error" role="alert">{error}</span>}
+        <button className="btn primary block pill" disabled={busy || !normalized}>
+          {busy ? "…" : "Undang"}
+        </button>
         <span className="hint">
           <Icon name="lock" size={12} /> Catatan <strong>terenkripsi end-to-end</strong> — hanya pemilik PIN yang bisa membacanya.
         </span>
-        {error && <span className="error" role="alert">{error}</span>}
       </form>
     </section>
   );

@@ -67,14 +67,11 @@ export function Auth({ onAuthed, notice, initialAlias }: { onAuthed: (me: Me, pa
   return (
     <div className="auth">
       <div className="auth-card">
-        <div className="row" style={{ marginBottom: 18 }}>
-          <div className="logo">
-            <Icon name="fingerprint" />
-          </div>
-          <div>
-            <div className="brand">PINPath</div>
-            <div className="small muted">Messenger PIN terenkripsi end-to-end</div>
-          </div>
+        <div className="hero-mark">
+          <Icon name="mask" size={44} strokeWidth={1.6} />
+          <div className="hero-name">PINPath</div>
+          <h1 className="hero-title">Mulai Obrolan Rahasia</h1>
+          <div className="small muted">Messenger PIN terenkripsi end-to-end</div>
         </div>
 
         <div className="card">
