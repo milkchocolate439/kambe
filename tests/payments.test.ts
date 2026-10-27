@@ -33,7 +33,8 @@ async function gatewayMarket() {
   await buyer.signup("Pembeli_Gateway");
   await buyer.post("/api/contacts/invite", { pin: s.me.pin });
   await seller.post(`/api/contacts/requests/${(await seller.get("/api/contacts")).body.incoming[0].id}/accept`);
-  await seller.post("/api/pro/subscribe", { idempotencyKey: key() });
+  // PRO disiapkan langsung di DB: endpoint langganan tidak aktif saat gateway sungguhan dipakai.
+  app.db.prepare("UPDATE users SET pro_until = ? WHERE id = ?").run(Date.now() + 30 * 24 * 3600 * 1000, s.me.id);
   const prod = (await addProduct(seller, { title: "Rotan 1 ton", sector: "Komoditas & Pangan", price: 4_000_000 })).body;
   const deal = (await createDeal(buyer, prod.id, key(), seller.party, "Rotan 1 ton")).body;
   return { app, base, gw, seller, buyer, sellerId: s.me.id, deal };

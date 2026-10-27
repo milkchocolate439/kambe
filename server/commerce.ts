@@ -348,6 +348,11 @@ export function registerCommerce(d: CommerceDeps) {
   route("GET", "/api/pro", authed(({ user }) => proStatus(user)));
 
   route("POST", "/api/pro/subscribe", authed(async ({ req, user }) => {
+    // Langganan belum punya alur pembayaran nyata: aktivasi hanya boleh di simulasi lokal.
+    // Di produksi atau dengan gateway sungguhan, tanpa pembayaran terkonfirmasi tidak ada PRO.
+    if (process.env.NODE_ENV === "production" || d.payments.name !== "simulasi") {
+      throw new HttpError(402, "pro_unavailable", "Langganan PRO belum tersedia: pembayaran belum dihubungkan.");
+    }
     const key = idemKey(await d.readJson(req));
     d.limit(`pro:${user.id}`, 10, HOUR, "Terlalu banyak percobaan langganan.");
     const now = Date.now();

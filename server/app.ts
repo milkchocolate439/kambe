@@ -13,7 +13,9 @@ import { createSealedStore } from "./sealed.ts";
 import { simulatedProvider, type PaymentProvider } from "./payments.ts";
 import type { KeyObject } from "node:crypto";
 import {
+  FailureBackoff,
   RateLimiter,
+  relaySend,
   burnTime,
   generateRecoveryCode,
   hashSecret,
@@ -64,6 +66,8 @@ export interface AppOptions {
   /** Penyedia pembayaran. Default: simulasi (tanpa uang sungguhan). */
   payments?: PaymentProvider;
   log?: (msg: string) => void;
+  /** Jeda bertahap login per alias (tes memakai nilai kecil). Default: 2 dtk, naik 2x lipat, maks. 5 menit. */
+  loginBackoff?: { baseMs?: number; maxMs?: number };
 }
 
 const COOKIE = "pp_session";
@@ -95,6 +99,13 @@ async function isUsableX25519(publicKey: string): Promise<boolean> {
 export function createApp(opts: AppOptions) {
   const db: DB = openDb(opts.dbPath);
   const limiter = new RateLimiter();
+  // Jeda login per alias: kegagalan ke-1..4 bebas, lalu jeda naik bertahap dan otomatis berakhir.
+  const loginFails = new FailureBackoff({
+    freeFails: 4,
+    baseMs: opts.loginBackoff?.baseMs ?? 2_000,
+    maxMs: opts.loginBackoff?.maxMs ?? 5 * 60 * 1000,
+    forgetMs: 60 * 60 * 1000,
+  });
   const log = opts.log ?? (() => {});
   const sockets = new Map<string, Set<WebSocket & { tokenHash?: string; alive?: boolean }>>();
 
@@ -153,11 +164,14 @@ export function createApp(opts: AppOptions) {
   }
 
   function emit(userId: string, event: ServerEvent, exceptTokenHash?: string) {
+    // Catatan: pesan `message` sudah tersimpan sebelum emit dipanggil, jadi tidak ada yang hilang saat penerima diputus.
     const set = sockets.get(userId);
     if (!set) return;
     const data = JSON.stringify(event);
     for (const ws of set) {
-      if (ws.readyState === WebSocket.OPEN && ws.tokenHash !== exceptTokenHash) ws.send(data);
+      if (ws.tokenHash === exceptTokenHash) continue;
+      // Penerima lambat diputus (lihat relaySend); pesannya tetap di antrean DB dan diambil saat tersambung ulang.
+      if (relaySend(ws, data) === "slow") log(`[relay] penerima lambat diputus: ${userId}`);
     }
   }
 
@@ -350,7 +364,7 @@ export function createApp(opts: AppOptions) {
   function markDelivered(recipientId: string, ids: string[]) {
     const now = Date.now();
     const bySender = new Map<string, string[]>();
-    const find = db.prepare("SELECT sender_id FROM messages WHERE id = ? AND recipient_id = ? AND delivered_at IS NULL");
+    const find = db.prepare("SELECT sender_id FROM messages WHERE id = ? AND recipient_id = ? AND delivered_at IS NULL AND expired_at IS NULL");
     const upd = db.prepare("UPDATE messages SET delivered_at = ?, nonce = '', ciphertext = '' WHERE id = ?");
     tx(db, () => {
       for (const id of ids.slice(0, 200)) {
@@ -414,15 +428,33 @@ export function createApp(opts: AppOptions) {
     const body = await readJson(req);
     const alias = str(body, "alias", { min: 1, max: 24 });
     const passphrase = str(body, "passphrase", { min: 1, max: PASSPHRASE_MAX });
-    limit(`login-ip:${ip}`, 20, 15 * 60 * 1000, "Terlalu banyak percobaan masuk. Tunggu sebentar.");
-    limit(`login-alias:${alias.toLowerCase()}`, 8, 15 * 60 * 1000, "Terlalu banyak percobaan untuk akun ini. Tunggu 15 menit.");
+    // Batas login (lihat tes/login-guard.test.ts):
+    // - total percobaan per IP: 20 / 15 menit (tetap berlaku);
+    // - kegagalan per IP: 8 / 15 menit → percobaan ke-9 dari IP itu diblokir, apa pun aliasnya;
+    // - jeda bertahap per alias: BUKAN kunci permanen; jeda berakhir sendiri.
+    // Semua penolakan memakai kode & pesan yang sama, sehingga tidak membocorkan apakah alias ada.
+    const LOGIN_WINDOW = 15 * 60 * 1000;
+    const LOGIN_FAIL_IP_MAX = 8;
+    const BUSY = "Terlalu banyak percobaan masuk. Tunggu sebentar.";
+    const aliasKey = `login-alias:${alias.toLowerCase()}`;
+    const failIpKey = `login-fail-ip:${ip}`;
+    limit(`login-ip:${ip}`, 20, LOGIN_WINDOW, BUSY);
+    if (limiter.count(failIpKey, LOGIN_WINDOW) >= LOGIN_FAIL_IP_MAX) {
+      throw new HttpError(429, "rate_limited", BUSY, limiter.retryAfter(failIpKey, LOGIN_WINDOW));
+    }
+    const waitMs = loginFails.waitMs(aliasKey);
+    if (waitMs > 0) throw new HttpError(429, "rate_limited", BUSY, Math.max(1, Math.ceil(waitMs / 1000)));
+
     const user = q.userByAlias.get(alias) as UserRow | undefined;
-    if (!user) {
-      await burnTime(passphrase);
+    let ok = false;
+    if (user) ok = await verifySecret(passphrase, user.pass_hash);
+    else await burnTime(passphrase);
+    if (!user || !ok) {
+      limiter.record(failIpKey);
+      loginFails.fail(aliasKey);
       throw new HttpError(401, "bad_credentials", "Alias atau passphrase salah");
     }
-    if (!(await verifySecret(passphrase, user.pass_hash))) throw new HttpError(401, "bad_credentials", "Alias atau passphrase salah");
-    limiter.reset(`login-alias:${alias.toLowerCase()}`);
+    loginFails.success(aliasKey);
     startSession(res, user.id);
     return { me: toMe(user) };
   });
@@ -825,14 +857,19 @@ export function createApp(opts: AppOptions) {
     if (!peer || !q.isContact.get(user.id, peer.id)) throw new HttpError(404, "not_found", "Percakapan tidak ditemukan");
     const pending = (
       db
-        .prepare("SELECT * FROM messages WHERE sender_id = ? AND recipient_id = ? AND delivered_at IS NULL ORDER BY created_at ASC LIMIT 500")
+        .prepare("SELECT * FROM messages WHERE sender_id = ? AND recipient_id = ? AND delivered_at IS NULL AND expired_at IS NULL ORDER BY created_at ASC LIMIT 500")
         .all(peer.id, user.id) as Row[]
     ).map((r) => toMessage(r, user.read_receipts === 1));
     const statuses = (
       db
-        .prepare("SELECT id, delivered_at, read_at, created_at FROM messages WHERE sender_id = ? AND recipient_id = ? ORDER BY created_at DESC LIMIT 500")
+        .prepare("SELECT id, delivered_at, read_at, created_at, expired_at FROM messages WHERE sender_id = ? AND recipient_id = ? ORDER BY created_at DESC LIMIT 500")
         .all(user.id, peer.id) as Row[]
-    ).map((r) => ({ id: r.id as string, status: messageStatus(r, peer.read_receipts === 1), createdAt: r.created_at as number }));
+    ).map((r) => ({
+      id: r.id as string,
+      status: messageStatus(r, peer.read_receipts === 1),
+      createdAt: r.created_at as number,
+      expired: r.expired_at != null,
+    }));
     return { pending, statuses };
   }));
 
@@ -1135,7 +1172,7 @@ export function createApp(opts: AppOptions) {
       const now = Date.now();
       const changed: string[] = [];
       const upd = db.prepare(
-        "UPDATE messages SET read_at = ?, delivered_at = COALESCE(delivered_at, ?), nonce = '', ciphertext = '' WHERE id = ? AND recipient_id = ? AND sender_id = ? AND read_at IS NULL",
+        "UPDATE messages SET read_at = ?, delivered_at = COALESCE(delivered_at, ?), nonce = '', ciphertext = '' WHERE id = ? AND recipient_id = ? AND sender_id = ? AND read_at IS NULL AND expired_at IS NULL",
       );
       tx(db, () => {
         for (const id of ev.ids.slice(0, 200)) {
@@ -1149,6 +1186,35 @@ export function createApp(opts: AppOptions) {
   }
 
   // ---------------------------------------------------------- perawatan ---
+
+  /**
+   * Retensi relay 30 hari. Setiap sapuan, berurutan:
+   * 1) pesan yang sudah ditandai expired pada sapuan SEBELUMNYA → dihapus permanen;
+   * 2) pesan terkirim yang lewat 30 hari (tinggal metadata status) → dihapus;
+   * 3) pesan BELUM terkirim yang lewat 30 hari → ditandai expired (ciphertext dikosongkan) dan
+   *    pengirim diberi tahu SEKALI lewat event "expired". Barisnya baru hilang di sapuan berikutnya,
+   *    sehingga notifikasi sempat terkirim sebelum data dihapus.
+   * Catatan: notifikasi lewat WebSocket hanya sampai bila pengirim sedang online; jika tidak,
+   * pengirim melihat `expired: true` di GET /api/messages/:peer (statuses).
+   */
+  function runRetention(now = Date.now()): { removed: number; expired: number } {
+    const cutoff = now - MESSAGE_RETENTION_MS;
+    const removed = Number(db.prepare("DELETE FROM messages WHERE expired_at IS NOT NULL").run().changes);
+    db.prepare("DELETE FROM messages WHERE created_at <= ? AND delivered_at IS NOT NULL").run(cutoff);
+    const stale = db
+      .prepare("SELECT id, sender_id FROM messages WHERE created_at <= ? AND delivered_at IS NULL AND expired_at IS NULL")
+      .all(cutoff) as { id: string; sender_id: string }[];
+    const bySender = new Map<string, string[]>();
+    tx(db, () => {
+      const mark = db.prepare("UPDATE messages SET expired_at = ?, nonce = '', ciphertext = '' WHERE id = ? AND expired_at IS NULL");
+      for (const m of stale) {
+        mark.run(now, m.id);
+        bySender.set(m.sender_id, [...(bySender.get(m.sender_id) ?? []), m.id]);
+      }
+    });
+    for (const [sender, ids] of bySender) emit(sender, { t: "expired", ids });
+    return { removed, expired: stale.length };
+  }
 
   const heartbeat = setInterval(() => {
     for (const set of sockets.values()) {
@@ -1165,8 +1231,9 @@ export function createApp(opts: AppOptions) {
 
   const janitor = setInterval(() => {
     db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(Date.now());
-    // Relay, bukan arsip: ciphertext yang tak pernah diambil & metadata status dihapus setelah 30 hari.
-    db.prepare("DELETE FROM messages WHERE created_at <= ?").run(Date.now() - MESSAGE_RETENTION_MS);
+    // Relay, bukan arsip: ciphertext yang tak pernah diambil ditandai expired lalu dihapus setelah 30 hari.
+    runRetention();
+    loginFails.sweep();
     // Catatan undangan terenkripsi yang undangannya sudah diterima/ditolak/dibatalkan → hapus.
     db.prepare("DELETE FROM sealed_objects WHERE kind = 'note' AND id NOT IN (SELECT note_object FROM contact_requests WHERE note_object IS NOT NULL)").run();
     discovery.sweep();
@@ -1191,6 +1258,8 @@ export function createApp(opts: AppOptions) {
     db,
     runTimers: commerce.runTimers,
     runPinRotation,
+    /** Sapuan retensi pesan (dipakai janitor & tes). */
+    runRetention,
     notaryPublicKey: notary.publicKey,
     /** Ganti daftar moderator (ID akun) saat berjalan — dipakai tes; produksi memakai env saat start. */
     setModerators(ids: string[]) {

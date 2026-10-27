@@ -95,6 +95,18 @@ export class RateLimiter {
     this.hits.delete(key);
   }
 
+  /** Jumlah kejadian dalam jendela waktu, tanpa mencatat kejadian baru. */
+  count(key: string, windowMs: number, now = Date.now()): number {
+    return (this.hits.get(key) ?? []).filter((t) => now - t < windowMs).length;
+  }
+
+  /** Catat satu kejadian tanpa memeriksa batas (mis. kegagalan masuk). */
+  record(key: string, now = Date.now()): void {
+    const list = this.hits.get(key) ?? [];
+    list.push(now);
+    this.hits.set(key, list);
+  }
+
   /** Buang entri kedaluwarsa agar memori tidak terus tumbuh. */
   sweep(maxWindowMs: number, now = Date.now()): void {
     for (const [k, list] of this.hits) {
@@ -103,4 +115,72 @@ export class RateLimiter {
       else this.hits.set(k, kept);
     }
   }
+}
+
+/**
+ * Jeda bertahap (backoff) untuk kegagalan per kunci (mis. alias). Kegagalan ke-1..freeFails
+ * bebas; sesudahnya jeda 2x lipat tiap kegagalan (baseMs, 2×baseMs, …) hingga maxMs.
+ * Tidak pernah permanen: jeda berakhir sendiri, dan hitungan di-reset setelah forgetMs
+ * tanpa kegagalan baru atau saat login berhasil.
+ */
+export class FailureBackoff {
+  private state = new Map<string, { fails: number; last: number }>();
+  private readonly opts: { freeFails: number; baseMs: number; maxMs: number; forgetMs: number };
+
+  constructor(opts: { freeFails: number; baseMs: number; maxMs: number; forgetMs: number }) {
+    this.opts = opts;
+  }
+
+  /** Berapa ms lagi harus menunggu sebelum boleh mencoba (0 = boleh sekarang). */
+  waitMs(key: string, now = Date.now()): number {
+    const s = this.state.get(key);
+    if (!s) return 0;
+    const over = s.fails - this.opts.freeFails;
+    if (over <= 0) return 0;
+    const delay = Math.min(this.opts.baseMs * 2 ** (over - 1), this.opts.maxMs);
+    return Math.max(0, s.last + delay - now);
+  }
+
+  fail(key: string, now = Date.now()): void {
+    const s = this.state.get(key);
+    const fresh = !!s && now - s.last < this.opts.forgetMs;
+    this.state.set(key, { fails: (fresh ? s!.fails : 0) + 1, last: now });
+  }
+
+  success(key: string): void {
+    this.state.delete(key);
+  }
+
+  sweep(now = Date.now()): void {
+    for (const [k, s] of this.state) if (now - s.last >= this.opts.forgetMs) this.state.delete(k);
+  }
+}
+
+// ------------------------------------------------------------- relay ---
+
+/** Ambang antrean kirim per koneksi (byte). Di atas ini penerima dianggap terlalu lambat. */
+export const RELAY_BUFFER_LIMIT = 1024 * 1024;
+
+export interface RelaySocket {
+  readyState: number;
+  bufferedAmount: number;
+  send(data: string): void;
+  terminate(): void;
+}
+
+/**
+ * Kirim pesan relay tanpa menumpuk memori. Bila `bufferedAmount` melewati ambang, koneksi
+ * penerima diputus ("slow") dan pesan TIDAK dikirim: pesan sudah tersimpan di antrean server
+ * (belum berstatus delivered), jadi penerima mengambilnya lagi lewat GET /api/messages/:peer
+ * saat tersambung ulang.
+ */
+export function relaySend(ws: RelaySocket, data: string, limit = RELAY_BUFFER_LIMIT): "sent" | "closed" | "slow" {
+  const OPEN = 1; // WebSocket.OPEN
+  if (ws.readyState !== OPEN) return "closed";
+  if (ws.bufferedAmount > limit) {
+    ws.terminate();
+    return "slow";
+  }
+  ws.send(data);
+  return "sent";
 }

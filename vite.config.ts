@@ -10,7 +10,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     proxy: {
-      "/api": "http://127.0.0.1:3300",
+      // changeOrigin: false menjaga header Host tetap sama dengan Origin browser;
+      // server memeriksa keduanya untuk menolak permintaan lintas-situs (bad_origin).
+      "/api": { target: "http://127.0.0.1:3300", changeOrigin: false },
       "/ws": { target: "ws://127.0.0.1:3300", ws: true },
     },
   },

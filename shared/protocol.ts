@@ -180,6 +180,8 @@ export type ServerEvent =
   | { t: "ack"; id: string; createdAt: number; status: DeliveryStatus }
   | { t: "rejected"; id: string; code: string; message: string }
   | { t: "status"; ids: string[]; status: DeliveryStatus }
+  /** Pesan belum terkirim melewati 30 hari; dikirim sekali ke pengirim sebelum baris dihapus. */
+  | { t: "expired"; ids: string[] }
   | { t: "contacts_changed" }
   | { t: "key_changed"; userId: string }
   | { t: "deals_changed"; peer: string }

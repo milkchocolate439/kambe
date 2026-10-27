@@ -10,6 +10,10 @@ const production = env.NODE_ENV === "production";
 
 /** Default SIMULASI. Gateway nyata hanya bila dinyalakan eksplisit & semua kunci (server-only) tersedia. */
 function paymentProvider(): PaymentProvider {
+  // Produksi tidak boleh berjalan dengan simulasi: "bayar" di sana tidak memindahkan uang sungguhan.
+  if (production && env.PINPATH_PAYMENT_PROVIDER !== "xendit") {
+    throw new Error("NODE_ENV=production butuh PINPATH_PAYMENT_PROVIDER=xendit (simulasi ditolak di produksi)");
+  }
   if (env.PINPATH_PAYMENT_PROVIDER !== "xendit") return simulatedProvider;
   const missing = ["XENDIT_SECRET_KEY", "XENDIT_CALLBACK_TOKEN", "PINPATH_PUBLIC_URL"].filter((k) => !env[k]);
   if (missing.length) throw new Error(`PINPATH_PAYMENT_PROVIDER=xendit butuh: ${missing.join(", ")}`);

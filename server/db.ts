@@ -271,6 +271,8 @@ function migrate(db: DatabaseSync) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
   };
   addCol("users", "pm_object", "TEXT");
+  // Retensi 30 hari: waktu pesan belum terkirim ditandai "expired" (ciphertext sudah dikosongkan).
+  addCol("messages", "expired_at", "INTEGER");
   addCol("contact_requests", "note_object", "TEXT");
   addCol("shadow_pins", "label_object", "TEXT");
   addCol("products", "content_object", "TEXT");
