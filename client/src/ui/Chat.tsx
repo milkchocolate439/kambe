@@ -398,10 +398,10 @@ function StatusMark({ msg, onRetry }: { msg: ChatMessage; onRetry: () => void })
       </button>
     );
   }
-  const label = { S: "Terkirim ke server", D: "Diterima perangkat lawan (Delivered)", R: "Sudah dibaca (Read)" }[msg.status];
+  const label = { S: "Terkirim ke server", D: "Diterima perangkat lawan (Delivered)", R: "Sudah dibaca (Read)", X: "Kedaluwarsa: tidak terkirim dalam 30 hari" }[msg.status];
   return (
     <span className={`status ${msg.status}`} title={label} aria-label={label}>
-      {msg.status === "S" ? "✓" : msg.status}
+      {msg.status === "S" ? "✓" : msg.status === "X" ? "⌛" : msg.status}
     </span>
   );
 }

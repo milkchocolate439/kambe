@@ -59,7 +59,8 @@ export type ReceiptCheck =
   | { state: "invalid" | "mismatch" | "rollback" | "missing"; seq: number | null };
 import { Realtime, type ConnState } from "./realtime.ts";
 
-export type MsgStatus = "pending" | "S" | "D" | "R" | "failed";
+/** X = kedaluwarsa: belum terkirim dalam 30 hari, ciphertext sudah dihapus server. */
+export type MsgStatus = "pending" | "S" | "D" | "R" | "failed" | "X";
 
 export interface ChatMessage {
   id: string;
@@ -135,7 +136,7 @@ export interface State {
   receipts: Record<string, ReceiptCheck>;
 }
 
-const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3 };
+const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3, X: 1 };
 
 /** Isi file cadangan (setelah didekripsi). */
 interface BackupData {
@@ -621,7 +622,7 @@ export class Messenger {
       if (i < 0) return { ...t, messages: [...t.messages, msg].sort((a, b) => a.createdAt - b.createdAt) };
       const prev = t.messages[i];
       // Status hanya boleh naik (S→D→R), tidak turun karena event yang datang terlambat.
-      const status = RANK[msg.status] >= RANK[prev.status] || prev.status === "failed" ? msg.status : prev.status;
+      const status = RANK[msg.status] >= RANK[prev.status] || prev.status === "failed" || msg.status === "X" ? msg.status : prev.status;
       const messages = [...t.messages];
       messages[i] = { ...prev, ...msg, status };
       return { ...t, messages };
@@ -634,7 +635,7 @@ export class Messenger {
     const threads = { ...this.state.threads };
     const touched: [string, string[]][] = [];
     for (const [peer, t] of Object.entries(threads)) {
-      const hit = t.messages.filter((m) => set.has(m.id) && (status === "failed" || RANK[status] > RANK[m.status])).map((m) => m.id);
+      const hit = t.messages.filter((m) => set.has(m.id) && (status === "failed" || status === "X" || RANK[status] > RANK[m.status])).map((m) => m.id);
       if (!hit.length) continue;
       threads[peer] = { ...t, messages: t.messages.map((m) => (hit.includes(m.id) ? { ...m, status, error } : m)) };
       touched.push([peer, hit]);
@@ -1098,6 +1099,9 @@ export class Messenger {
       }
       case "status":
         this.patchStatus(ev.ids, ev.status);
+        break;
+      case "expired":
+        this.patchStatus(ev.ids, "X");
         break;
       case "contacts_changed":
         await this.refreshContacts();

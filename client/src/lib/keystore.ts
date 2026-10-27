@@ -31,7 +31,7 @@ export interface LocalMessage {
   kind: "text" | "ping" | "identity" | "locked" | "broken";
   text: string;
   createdAt: number;
-  status: "pending" | "S" | "D" | "R" | "failed";
+  status: "pending" | "S" | "D" | "R" | "failed" | "X";
   error?: string;
   untrusted?: boolean;
 }
