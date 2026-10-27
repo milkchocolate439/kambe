@@ -175,6 +175,14 @@ export const keystore = {
     });
   },
 
+  /** Hapus pesan tertentu dari perangkat ini saja (kunci = `${owner}:${id}`). */
+  async deleteMessages(owner: string, ids: string[]) {
+    if (!ids.length) return;
+    await run<void>("messages", "readwrite", (s) => {
+      for (const id of ids) s.delete(`${owner}:${id}`);
+    });
+  },
+
   /** Riwayat satu percakapan, urut waktu (maks. `limit` terbaru). */
   async getThread(owner: string, peer: string, limit = 1000): Promise<LocalMessage[]> {
     const all = await run<(StoredMessage | LocalMessage)[]>("messages", "readonly", (s) =>

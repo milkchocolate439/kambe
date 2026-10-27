@@ -79,7 +79,17 @@ async function main() {
   mkdirSync(OUT, { recursive: true });
   const dataDir = mkdtempSync(join(tmpdir(), "pinpath-e2e-"));
   const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), PINPATH_DB: join(dataDir, "e2e.db") },
+    // Verifikasi lokal: mode produksi butuh penyedia xendit; skenario chat ini tidak membayar, jadi kunci palsu aman.
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      PINPATH_PAYMENT_PROVIDER: "xendit",
+      XENDIT_SECRET_KEY: "xnd_development_verify_only",
+      XENDIT_CALLBACK_TOKEN: "verify-only",
+      PINPATH_PUBLIC_URL: BASE,
+      PORT: String(PORT),
+      PINPATH_DB: join(dataDir, "e2e.db"),
+    },
     stdio: ["ignore", "inherit", "inherit"],
   });
   let browser: Browser | null = null;
@@ -142,6 +152,37 @@ async function main() {
     // Bob seharusnya melihat status R setelah alice membaca.
     await bob.locator(".status.R").first().waitFor({ timeout: 5000 });
     check(true, "status BBM berubah menjadi R setelah dibaca");
+
+    // Header tetap lapang di HP: kolom nama/status tidak menyusut ke 0 px.
+    const headGrow = await bob.evaluate(() => document.querySelector(".chat-head .grow")?.getBoundingClientRect().width ?? 0);
+    check(headGrow > 90, `header chat di HP punya ruang untuk nama & status (${Math.round(headGrow)}px)`);
+
+    // --- Fitur baru: cari dalam chat ---
+    await bob.getByRole("button", { name: "Menu kontak" }).click();
+    await bob.getByRole("button", { name: "Cari pesan dalam chat" }).click();
+    await bob.getByLabel("Cari pesan dalam chat ini").fill("halo");
+    await bob.getByText("1 cocok").waitFor();
+    check(true, "cari pesan: kata 'halo' cocok 1 pesan");
+    await bob.getByLabel("Cari pesan dalam chat ini").fill("tidak-ada-kata-ini");
+    await bob.getByText("0 cocok").waitFor();
+    check((await bob.locator(".bubble").count()) === 0, "cari tanpa hasil: tidak ada pesan yang tampil");
+    await bob.getByLabel("Cari pesan dalam chat ini").fill("");
+    await bob.getByRole("button", { name: "Tutup pencarian" }).click();
+    check(!(await bob.getByLabel("Cari pesan dalam chat ini").count()), "tombol tutup menutup bilah pencarian");
+
+    // --- Fitur baru: hapus pesan untuk saya (lokal) ---
+    await bob.locator(".bubble", { hasText: "Halo!" }).first().click();
+    await bob.getByRole("button", { name: /Hapus untuk saya/ }).click();
+    await bob.getByText(/Pesan ini hilang dari perangkat ini saja/).waitFor();
+    await bob.getByRole("button", { name: "Hapus", exact: true }).click();
+    await bob.getByText("Pesan dihapus dari perangkat ini").waitFor();
+    check((await bob.locator(".bubble", { hasText: "Halo!" }).count()) === 0, "hapus untuk saya: pesan hilang dari layar bob");
+    await bob.reload();
+    await bob.getByRole("button", { name: /Anon_Wolf99/ }).click();
+    await bob.locator(".chat-head").waitFor();
+    await bob.waitForTimeout(1500); // beri waktu riwayat dimuat dari IndexedDB sebelum memeriksa
+    check((await bob.locator(".bubble", { hasText: "Halo!" }).count()) === 0, "setelah reload, pesan yang dihapus tetap hilang (IndexedDB)");
+    check((await alice.locator(".bubble", { hasText: "Halo!" }).count()) > 0, "alice tetap punya pesan itu (hapus hanya di perangkat bob)");
 
     // Alice mengirim pesan berpola penipuan → bob mendapat peringatan di perangkatnya.
     await alice.getByLabel("Tulis pesan").fill("Boleh minta kode OTP kamu? biar saya proses");

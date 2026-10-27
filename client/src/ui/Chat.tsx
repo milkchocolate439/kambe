@@ -37,6 +37,10 @@ export function Chat() {
   const [shop, setShop] = useState<null | "catalog" | "offer" | "upgrade">(null);
   const [shake, setShake] = useState(false);
   const [emoji, setEmoji] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<ChatMessage | null>(null);
+  const [forgetAsk, setForgetAsk] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
@@ -44,6 +48,10 @@ export function Chat() {
   useEffect(() => {
     setText("");
     setEmoji(false);
+    setSearching(false);
+    setQuery("");
+    setPicked(null);
+    setForgetAsk(false);
   }, [peer]);
 
   // PING!!! dari kontak yang sedang dibuka → layar bergetar.
@@ -85,6 +93,11 @@ export function Chat() {
     ...(thread?.messages ?? []).map((msg): TimelineItem => ({ t: "msg", at: msg.createdAt, msg })),
     ...(deals ?? []).map((deal): TimelineItem => ({ t: "deal", at: deal.createdAt, deal })),
   ].sort((a, b) => a.at - b.at);
+  // Cari dalam chat: hanya pesan teks yang cocok. Berjalan di perangkat (riwayat sudah terdekripsi di memori).
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? timeline.filter((it) => it.t === "msg" && it.msg.kind === "text" && it.msg.text.toLowerCase().includes(needle))
+    : timeline;
 
   async function send() {
     const body = text.trim();
@@ -152,8 +165,8 @@ export function Chat() {
         <button className="btn ghost icon" onClick={() => setShop("catalog")} aria-label={`Etalase ${contact.alias}`} title="Lihat etalase">
           <Icon name="store" />
         </button>
-        <button className="btn ping small" onClick={() => void m.send(peer, { kind: "ping" })} disabled={!!blocker} title="Getarkan layar lawan bicara (maks. 30 detik sekali)">
-          <Icon name="vibrate" size={15} /> PING!!!
+        <button className="btn ping small" aria-label="PING!!!" onClick={() => void m.send(peer, { kind: "ping" })} disabled={!!blocker} title="Getarkan layar lawan bicara (maks. 30 detik sekali)">
+          <Icon name="vibrate" size={15} /> <span className="hide-mobile">PING!!!</span>
         </button>
         <button className="btn ghost icon" onClick={() => setMenu("menu")} aria-label="Menu kontak">
           <Icon name="more" />
@@ -171,6 +184,31 @@ export function Chat() {
               <button className="btn small primary" onClick={() => void m.acknowledgeKeyChange(peer)}>Saya mengerti, lanjutkan</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {searching && (
+        <div className="row" style={{ gap: 8, padding: "8px 12px" }}>
+          <input
+            className="input grow"
+            autoFocus
+            maxLength={200}
+            placeholder="Cari pesan…"
+            aria-label="Cari pesan dalam chat ini"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <span className="small muted" aria-live="polite">{needle ? `${shown.length} cocok` : ""}</span>
+          <button
+            className="btn ghost icon"
+            aria-label="Tutup pencarian"
+            onClick={() => {
+              setSearching(false);
+              setQuery("");
+            }}
+          >
+            <Icon name="x" />
+          </button>
         </div>
       )}
 
@@ -198,14 +236,19 @@ export function Chat() {
             </div>
           </div>
         )}
-        {timeline.map((item, i) => {
-          const prev = timeline[i - 1];
+        {shown.map((item, i) => {
+          const prev = shown[i - 1];
           const newDay = !prev || dayOf(prev.at) !== dayOf(item.at);
           return (
             <Fragment key={item.t === "msg" ? item.msg.id : `deal-${item.deal.id}`}>
               {newDay && <div className="day">{dayOf(item.at)}</div>}
               {item.t === "msg" ? (
-                <Bubble msg={item.msg} peerAlias={contact.alias} onRetry={() => m.retry(peer, item.msg.id)} />
+                <Bubble
+                  msg={item.msg}
+                  peerAlias={contact.alias}
+                  onRetry={() => m.retry(peer, item.msg.id)}
+                  onOpen={item.msg.kind === "text" ? () => setPicked(item.msg) : undefined}
+                />
               ) : (
                 <DealCard deal={item.deal} peer={peer} peerAlias={contact.alias} />
               )}
@@ -296,12 +339,62 @@ export function Chat() {
       {shop === "offer" && <OfferModal peer={peer} peerAlias={contact.alias} onClose={() => setShop(null)} />}
       {shop === "upgrade" && <StoreModal initial="pro" onClose={() => setShop(null)} />}
 
+      {picked && (
+        <Modal title="Pesan" onClose={() => { setPicked(null); setForgetAsk(false); }}>
+          <div className="stack">
+            <p className="small" style={{ margin: 0, color: "var(--text-2)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{picked.text}</p>
+            {!forgetAsk ? (
+              <div className="row">
+                <button
+                  className="btn grow"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(picked.text).then(
+                      () => m.toast("Pesan disalin"),
+                      () => m.toast("Gagal menyalin", "danger"),
+                    );
+                    setPicked(null);
+                  }}
+                >
+                  <Icon name="copy" /> Salin
+                </button>
+                <button className="btn danger grow" onClick={() => setForgetAsk(true)}>
+                  <Icon name="trash" /> Hapus untuk saya
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>
+                  Pesan ini hilang dari perangkat ini saja. {contact.alias} tetap punya salinannya, dan pesan ini tidak bisa dipulihkan.
+                </p>
+                <div className="row">
+                  <button className="btn grow" onClick={() => setForgetAsk(false)}>Batal</button>
+                  <button
+                    className="btn danger grow"
+                    onClick={async () => {
+                      await m.forgetMessage(peer, picked.id);
+                      setPicked(null);
+                      setForgetAsk(false);
+                      m.toast("Pesan dihapus dari perangkat ini");
+                    }}
+                  >
+                    Hapus
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+
       {menu === "menu" && (
         <Modal title={contact.alias} onClose={() => setMenu(null)}>
           <div className="stack">
             <div className="row small muted">
               PIN <span className="badge pin">{contact.pin}</span>
             </div>
+            <button className="btn block" onClick={() => { setMenu(null); setSearching(true); }}>
+              <Icon name="search" /> Cari pesan dalam chat
+            </button>
             <button className="btn block" onClick={() => { setMenu(null); setSafety(true); }}>
               <Icon name="shieldCheck" /> Verifikasi safety number
             </button>
@@ -335,7 +428,7 @@ export function Chat() {
   );
 }
 
-function Bubble({ msg, peerAlias, onRetry }: { msg: ChatMessage; peerAlias: string; onRetry: () => void }) {
+function Bubble({ msg, peerAlias, onRetry, onOpen }: { msg: ChatMessage; peerAlias: string; onRetry: () => void; onOpen?: () => void }) {
   if (msg.kind === "ping") {
     return (
       <div className="ping-pill">
@@ -348,7 +441,13 @@ function Bubble({ msg, peerAlias, onRetry }: { msg: ChatMessage; peerAlias: stri
   const warn = !msg.mine && msg.kind === "text" ? scamWarning(msg.text) : null;
   return (
     <div className={`bubble-row ${msg.mine ? "mine" : ""}`}>
-      <div className={`bubble ${special ? "special" : ""} ${msg.kind === "identity" ? "identity" : ""} ${msg.status === "failed" ? "failed" : ""}`}>
+      <div
+        className={`bubble ${special ? "special" : ""} ${msg.kind === "identity" ? "identity" : ""} ${msg.status === "failed" ? "failed" : ""}`}
+        onClick={onOpen}
+        onKeyDown={onOpen ? (e) => e.key === "Enter" && onOpen() : undefined}
+        role={onOpen ? "button" : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+      >
         {msg.kind === "identity" && (
           <div className="identity-head">
             <Icon name="idcard" size={13} /> IDENTITAS · TERENKRIPSI E2EE

@@ -616,6 +616,15 @@ export class Messenger {
     keystore.putMessages(msgs.map((m) => this.toLocal(peer, m))).catch(() => this.toast("Gagal menyimpan riwayat di perangkat ini", "warn"));
   }
 
+  /**
+   * "Hapus untuk saya": pesan hilang dari perangkat ini saja. Lawan bicara tetap punya salinannya,
+   * dan server tidak menyimpan riwayat (ciphertext sudah dihapus setelah terkirim).
+   */
+  async forgetMessage(peer: string, id: string): Promise<void> {
+    await keystore.deleteMessages(this.state.me.id, [id]);
+    this.setThread(peer, (t) => ({ ...t, messages: t.messages.filter((m) => m.id !== id) }));
+  }
+
   private upsert(peer: string, msg: ChatMessage, save = true) {
     this.setThread(peer, (t) => {
       const i = t.messages.findIndex((m) => m.id === msg.id);
