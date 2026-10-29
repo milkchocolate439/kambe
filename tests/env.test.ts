@@ -4,7 +4,26 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readEnv, defaultDbPath } from "../server/env.ts";
+import { readEnv, defaultDbPath, staticDirFor } from "../server/env.ts";
+
+test("readEnv: KAMBE_* kosong (template compose) tidak menutupi PINPATH_*", () => {
+  assert.equal(readEnv({ KAMBE_DB: "", PINPATH_DB: "/data/x.db" }, "DB"), "/data/x.db");
+  assert.equal(readEnv({ KAMBE_DB: "" }, "DB"), undefined);
+});
+
+test("staticDirFor: produksi selalu menyajikan dist", () => {
+  assert.equal(staticDirFor({ NODE_ENV: "production" }, "/app"), join("/app", "dist"));
+});
+
+test("staticDirFor: KAMBE_SERVE_DIST=1 hanya untuk NODE_ENV=test", () => {
+  assert.equal(staticDirFor({ NODE_ENV: "test", KAMBE_SERVE_DIST: "1" }, "/app"), join("/app", "dist"));
+  assert.throws(() => staticDirFor({ KAMBE_SERVE_DIST: "1" }, "/app"), /KAMBE_SERVE_DIST.*NODE_ENV=test/);
+  assert.throws(() => staticDirFor({ NODE_ENV: "development", PINPATH_SERVE_DIST: "1" }, "/app"), /KAMBE_SERVE_DIST/);
+});
+
+test("staticDirFor: dev tanpa saklar tidak menyajikan dist", () => {
+  assert.equal(staticDirFor({}, "/app"), undefined);
+});
 
 test("readEnv: nama lama PINPATH_* masih diterima", () => {
   assert.equal(readEnv({ PINPATH_DB: "a" }, "DB"), "a");

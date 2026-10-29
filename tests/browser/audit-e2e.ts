@@ -175,10 +175,28 @@ async function main() {
       await b.getByRole("button", { name: "Kirim" }).click();
       await a.getByText("Halo juga").waitFor();
       await audit(a, `${width} chat`);
+      // Varian gelembung milik sendiri yang sulit dicapai lewat alur (identitas lewat rekber, pesan terkunci):
+      // klon gelembung asli + kelas yang sama seperti Chat.tsx, lalu audit dengan CSS sungguhan.
+      await a.evaluate(() => {
+        const row = document.querySelector(".bubble-row.mine")!;
+        for (const kind of ["identity", "special"]) {
+          const copy = row.cloneNode(true) as HTMLElement;
+          copy.querySelector(".bubble")!.classList.add(kind);
+          row.parentElement!.appendChild(copy);
+        }
+      });
+      await audit(a, `${width} chat varian gelembung`);
 
-      await a.goto(BASE);
-      await a.locator(".dot.online").waitFor();
-      await a.getByRole("button", { name: "Jejak" }).first().click();
+      // Jejak berisi: milik sendiri (tombol hapus) + milik kontak (tombol reaksi aktif)
+      for (const [p, teks] of [[b, "Jejak dari Bima"], [a, "Jejak dari Ayu"]] as const) {
+        await p.goto(BASE);
+        await p.locator(".dot.online").waitFor();
+        await p.getByRole("button", { name: "Jejak" }).first().click();
+        await p.getByLabel("Isi jejak").fill(teks);
+        await p.getByRole("button", { name: "Bagikan" }).click();
+        await p.getByText(teks).last().waitFor();
+      }
+      await a.getByText("Jejak dari Bima").waitFor();
       await audit(a, `${width} jejak`);
       await a.keyboard.press("Escape");
 

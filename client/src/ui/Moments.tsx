@@ -141,7 +141,7 @@ function MomentItem({ mo }: { mo: MomentView }) {
           <button
             key={r}
             className={`btn small ${mo.myReaction === r ? "primary" : "ghost"}`}
-            style={{ minHeight: 30, padding: "0 8px" }}
+            style={{ padding: "0 8px" }}
             onClick={() => react(r)}
             aria-pressed={mo.myReaction === r}
             aria-label={`Reaksi ${REACTION_EMOJI[r]} (${mo.reactions[r]})`}
@@ -152,7 +152,7 @@ function MomentItem({ mo }: { mo: MomentView }) {
         ))}
         <span className="grow" />
         {mo.mine && (
-          <button className="btn ghost icon" style={{ width: 32, minHeight: 32 }} aria-label="Hapus jejak" onClick={() => void m.deleteMoment(mo.id).then(() => m.toast("Jejak dihapus", "ok"))}>
+          <button className="btn ghost icon" aria-label="Hapus jejak" onClick={() => void m.deleteMoment(mo.id).then(() => m.toast("Jejak dihapus", "ok"))}>
             <Icon name="trash" size={15} />
           </button>
         )}

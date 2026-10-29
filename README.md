@@ -37,7 +37,7 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 | `KAMBE_NOTARY_KEY` / `KAMBE_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
 | `KAMBE_PAYMENT_PROVIDER` | `simulasi` | `xendit` untuk gateway nyata (butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `KAMBE_PUBLIC_URL`, opsional `XENDIT_SPLIT_RULE_ID`) |
 | `KAMBE_PUBLIC_URL` | – | Alamat publik aplikasi (tujuan kembali setelah bayar di gateway) |
-| `KAMBE_SERVE_DIST` | – | `1` = sajikan `dist/` di luar produksi (uji E2E dengan pembayaran simulasi). Produksi selalu menyajikan `dist/` |
+| `KAMBE_SERVE_DIST` | – | Khusus uji: `1` + `NODE_ENV=test` = sajikan `dist/` dengan pembayaran simulasi. Di mode lain server menolak start. **Jangan dipakai untuk deployment** (pakai `NODE_ENV=production`) |
 | `VITE_NOTARY_PUBLIC_KEY` | – | (saat build) kunci publik notaris yang ditanam di aplikasi/APK; tanpa ini klien mem-pin kunci saat pertama terlihat |
 | `KAMBE_MODERATORS` | – | **ID akun** (UUID) moderator sengketa, dipisah koma. Cari ID: `node --import tsx scripts/moderator-id.ts <alias>`. Alias sengaja tidak diterima (bisa diserobot lewat pendaftaran) |
 

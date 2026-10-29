@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createApp } from "./app.ts";
-import { defaultDbPath, readEnv } from "./env.ts";
+import { defaultDbPath, readEnv, staticDirFor } from "./env.ts";
 import { loadNotaryKey } from "./notary.ts";
 import { simulatedProvider, xenditProvider, type PaymentProvider } from "./payments.ts";
 
@@ -35,8 +35,7 @@ const feePerMille = readEnv(env, "FEE_PER_MILLE");
 
 const app = createApp({
   dbPath: readEnv(env, "DB") ?? defaultDbPath(join(root, "data")),
-  // KAMBE_SERVE_DIST=1: sajikan hasil build di luar produksi (uji E2E dengan pembayaran simulasi)
-  staticDir: production || readEnv(env, "SERVE_DIST") === "1" ? join(root, "dist") : undefined,
+  staticDir: staticDirFor(env, root),
   secure: readEnv(env, "SECURE") === "1",
   trustProxy: readEnv(env, "TRUST_PROXY") === "1",
   allowedOrigins: readEnv(env, "ORIGINS")?.split(",").map((s) => s.trim()).filter(Boolean),

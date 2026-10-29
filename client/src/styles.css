@@ -229,6 +229,9 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .mine .status.R { color: var(--bubble-me-ink); }
 .mine .status.failed { color: var(--danger); background: var(--bg); }
 .mine .meta { opacity: 1; } /* tinta penuh: 5,3:1 untuk teks 11px */
+/* Gelembung sendiri yang tidak merah (identitas, terkunci/rusak): status kembali ke gaya netral. */
+.mine .bubble.identity .status, .mine .bubble.special .status { background: rgb(0 0 0 / 0.22); }
+.mine .bubble.identity .status.R, .mine .bubble.special .status.R { color: var(--arwah); }
 .status.failed { color: #fecaca; background: rgb(220 38 38 / 0.5); }
 .scam { margin-top: 6px; font-size: 12px; font-style: normal; color: var(--warn); display: flex; gap: 6px; align-items: flex-start; }
 .ping-pill { align-self: center; margin: 6px 0; padding: 5px 14px; border-radius: 999px; background: var(--rose-bg); color: var(--rose); font-weight: 800; letter-spacing: 0.12em; font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
