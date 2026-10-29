@@ -1,7 +1,7 @@
 // Service worker PINPath: hanya menyimpan cangkang aplikasi (HTML/JS/CSS/ikon)
 // supaya bisa di-install & cepat dibuka. API dan WebSocket TIDAK pernah di-cache —
 // data percakapan tidak boleh tertinggal di cache browser.
-const CACHE = "pinpath-shell-v1";
+const CACHE = "kambe-shell-v1";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/icon.svg", "/manifest.webmanifest"])));

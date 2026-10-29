@@ -1,14 +1,14 @@
 {
-  "name": "PINPath",
-  "short_name": "PINPath",
-  "description": "Messenger berbasis PIN dengan enkripsi end-to-end.",
+  "name": "KAMBE",
+  "short_name": "KAMBE",
+  "description": "KAMBE — Hadir tanpa jejak. Messenger terenkripsi end-to-end tanpa nomor HP.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#141414",
-  "theme_color": "#141414",
+  "background_color": "#0E0B0A",
+  "theme_color": "#0E0B0A",
   "lang": "id",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }

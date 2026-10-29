@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Ubin motif sulur Dayak (garis saja, satu warna). Semua garis di dalam ubin → sambungan mulus. -->
+  <g fill="none" stroke="#EEE9E2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 44C8 30 20 24 30 30C38 35 44 32 46 24"/>
+    <path d="M8 44C8 52 16 54 19 49C21 45 17 42 14 45"/>
+    <path d="M46 24C48 14 58 12 58 20C58 25 52 26 51 22"/>
+    <path d="M36 54C42 50 50 52 52 58"/>
+    <path d="M14 10C18 6 24 8 24 13C24 16 20 17 19 14"/>
+  </g>
+</svg>
