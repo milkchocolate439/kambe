@@ -1,4 +1,4 @@
-// Brankas perangkat PINPath (Tahap 2 "enkripsi mutlak").
+// Brankas perangkat KAMBE (Tahap 2 "enkripsi mutlak").
 //
 //   frasa kunci   : seed acak 256-bit milik pengguna, TIDAK pernah dikirim ke server.
 //                   Ditulis sebagai 14 grup × 4 karakter Crockford base32 (2 grup terakhir
@@ -202,7 +202,7 @@ export async function openRecord<T>(key: CryptoKey, bind: string, rec: SealedRec
 
 // ----------------------------------------------------------- cadangan ---
 
-export const BACKUP_FORMAT = "pinpath-backup";
+export const BACKUP_FORMAT = "pinpath-backup"; // label protokol, jangan diganti (lihat spec KAMBE)
 export const BACKUP_MAX_BYTES = 64 * 1024 * 1024;
 
 export interface BackupFile {
@@ -225,7 +225,7 @@ export async function encryptBackup(key: CryptoKey, userId: string, data: unknow
 export async function decryptBackup<T>(key: CryptoKey, userId: string, raw: unknown): Promise<{ createdAt: number; data: T }> {
   const f = raw as BackupFile;
   if (typeof f !== "object" || f === null || f.format !== BACKUP_FORMAT || f.v !== 1 || typeof f.createdAt !== "number" || typeof f.nonce !== "string" || typeof f.ct !== "string") {
-    throw new E2EEError("bad_backup", "Ini bukan file cadangan PINPath");
+    throw new E2EEError("bad_backup", "Ini bukan file cadangan KAMBE");
   }
   if (f.userId !== userId) throw new E2EEError("backup_other_account", "File cadangan ini milik akun lain");
   try {

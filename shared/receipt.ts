@@ -8,7 +8,7 @@
 import { fromB64 } from "./e2ee.ts";
 import type { DealStatus } from "./protocol.ts";
 
-export const RECEIPT_KIND = "pinpath.deal-receipt";
+export const RECEIPT_KIND = "pinpath.deal-receipt"; // label protokol, jangan diganti (lihat spec KAMBE)
 
 export interface ReceiptBody {
   v: 1;

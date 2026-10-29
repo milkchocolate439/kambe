@@ -1,4 +1,4 @@
-// PIN PINPath: 6 karakter dari 32 simbol yang tidak mudah tertukar
+// PIN Kambe: 6 karakter dari 32 simbol yang tidak mudah tertukar
 // (tanpa 0/O dan 1/I). 32^6 ≈ 1,07 miliar kombinasi.
 //
 // PIN BUKAN kata sandi — hanya kode untuk berbagi kontak. Karena ruangnya

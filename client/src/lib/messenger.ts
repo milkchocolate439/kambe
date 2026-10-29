@@ -334,7 +334,7 @@ export class Messenger {
     try {
       raw = JSON.parse(await file.text());
     } catch {
-      throw new ApiError(400, "bad_backup", "Ini bukan file cadangan PINPath");
+      throw new ApiError(400, "bad_backup", "Ini bukan file cadangan KAMBE");
     }
     const owner = this.state.me.id;
     let out: { createdAt: number; data: BackupData };
@@ -490,7 +490,7 @@ export class Messenger {
     const text = cleanDisplayText(note, NOTE_MAX);
     if (text) {
       const { publicKey } = await api<{ publicKey: string | null }>("POST", "/api/contacts/lookup", { pin });
-      if (!publicKey) throw new ApiError(409, "no_key", "Pemilik PIN belum pernah membuka PINPath, jadi catatan terenkripsi belum bisa dikirim. Kirim tanpa catatan.");
+      if (!publicKey) throw new ApiError(409, "no_key", "Pemilik PIN belum pernah membuka KAMBE, jadi catatan terenkripsi belum bisa dikirim. Kirim tanpa catatan.");
       sealedNote = await this.sealAs("note", { text }, [{ id: "target", publicKey }]);
     }
     const r = await api<{ status: "pending" | "connected" }>("POST", "/api/contacts/invite", { pin, sealedNote });
@@ -1029,7 +1029,7 @@ export class Messenger {
     if (this.state.device !== "ok" || !this.identity) return "Perangkat ini belum aktif untuk akunmu";
     const c = this.contact(peer);
     if (!c) return "Kontak tidak ditemukan";
-    if (!c.publicKey) return `${c.alias} belum pernah membuka PINPath di perangkatnya`;
+    if (!c.publicKey) return `${c.alias} belum pernah membuka KAMBE di perangkatnya`;
     if (this.state.keyAlerts[peer]) return "Safety number berubah — tinjau dulu sebelum mengirim";
     return null;
   }

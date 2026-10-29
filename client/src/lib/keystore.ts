@@ -1,4 +1,4 @@
-// Penyimpanan di perangkat (IndexedDB) = "mesin lokal" PINPath. Sejak Tahap 2 SEMUA isi
+// Penyimpanan di perangkat (IndexedDB) = "mesin lokal" KAMBE. Sejak Tahap 2 SEMUA isi
 // rahasia di sini terenkripsi dengan kunci yang diturunkan dari frasa kunci pengguna:
 //  - vault    : seed frasa kunci, dibungkus passphrase (PBKDF2 → AES-GCM). Tetap ada saat keluar.
 //  - unlocked : kunci yang sedang terbuka (identitas X25519 + kunci riwayat + kunci cadangan),
@@ -12,7 +12,7 @@
 import type { Identity } from "../../../shared/e2ee.ts";
 import { openRecord, sealRecord, type LocalKeys, type SealedRecord, type VaultBlob } from "../../../shared/vault.ts";
 
-const DB_NAME = "pinpath";
+const DB_NAME = "pinpath"; // label protokol, jangan diganti (lihat spec KAMBE)
 const VERSION = 4;
 
 export interface PinnedKey {

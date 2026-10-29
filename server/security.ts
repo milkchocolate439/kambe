@@ -34,7 +34,7 @@ export async function verifySecret(secret: string, stored: string): Promise<bool
 /** Hash dummy agar login dengan alias tak terdaftar butuh waktu yang sama (anti-enumerasi). */
 let dummyHash: Promise<string> | null = null;
 export async function burnTime(secret: string): Promise<void> {
-  dummyHash ??= hashSecret("pinpath-dummy-secret");
+  dummyHash ??= hashSecret("pinpath-dummy-secret"); // label tetap, jangan diganti (lihat spec KAMBE)
   await verifySecret(secret, await dummyHash);
 }
 

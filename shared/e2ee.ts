@@ -1,4 +1,4 @@
-// Inti enkripsi end-to-end PINPath. Dipakai di browser dan di tes Node
+// Inti enkripsi end-to-end KAMBE (dulu PINPath). Dipakai di browser dan di tes Node
 // (keduanya punya Web Crypto API standar di globalThis.crypto).
 //
 // Skema (v1):
@@ -18,7 +18,7 @@ const subtle = globalThis.crypto.subtle;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-export const PROTOCOL = "pinpath/v1";
+export const PROTOCOL = "pinpath/v1"; // label protokol, jangan diganti (lihat spec KAMBE)
 export const PUBLIC_KEY_BYTES = 32;
 export const NONCE_BYTES = 12;
 /** Batas ukuran plaintext agar satu pesan tidak membebani server/klien. */

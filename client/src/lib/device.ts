@@ -13,7 +13,7 @@ import {
 } from "../../../shared/vault.ts";
 import { keystore, type UnlockedDevice } from "./keystore.ts";
 
-const LEGACY_SHIPPING = (me: string) => `pinpath:identity:${me}`; // dulu: alamat polos di localStorage
+const LEGACY_SHIPPING = (me: string) => `pinpath:identity:${me}`; // dulu: alamat polos di localStorage; kunci lama, jangan diganti (lihat spec KAMBE)
 
 export type DeviceOpen =
   | { t: "ready"; device: UnlockedDevice; justSetUp: boolean }
