@@ -1,4 +1,4 @@
-// Service worker PINPath: hanya menyimpan cangkang aplikasi (HTML/JS/CSS/ikon)
+// Service worker KAMBE: hanya menyimpan cangkang aplikasi (HTML/JS/CSS/ikon)
 // supaya bisa di-install & cepat dibuka. API dan WebSocket TIDAK pernah di-cache —
 // data percakapan tidak boleh tertinggal di cache browser.
 const CACHE = "kambe-shell-v1";

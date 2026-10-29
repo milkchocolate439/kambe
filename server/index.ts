@@ -35,7 +35,8 @@ const feePerMille = readEnv(env, "FEE_PER_MILLE");
 
 const app = createApp({
   dbPath: readEnv(env, "DB") ?? defaultDbPath(join(root, "data")),
-  staticDir: production ? join(root, "dist") : undefined,
+  // KAMBE_SERVE_DIST=1: sajikan hasil build di luar produksi (uji E2E dengan pembayaran simulasi)
+  staticDir: production || readEnv(env, "SERVE_DIST") === "1" ? join(root, "dist") : undefined,
   secure: readEnv(env, "SECURE") === "1",
   trustProxy: readEnv(env, "TRUST_PROXY") === "1",
   allowedOrigins: readEnv(env, "ORIGINS")?.split(",").map((s) => s.trim()).filter(Boolean),

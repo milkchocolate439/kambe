@@ -53,7 +53,8 @@ async function main() {
   const modId = (await new Client(`http://127.0.0.1:${(seed.server.address() as AddressInfo).port}`).signup("Moderator_Satu", PASS)).me.id;
   await seed.close();
   const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), PINPATH_DB: dbPath, PINPATH_MODERATORS: modId },
+    // Bukan produksi: skenario ini butuh pembayaran simulasi, yang (benar) ditolak di produksi.
+    env: { ...process.env, NODE_ENV: "test", KAMBE_SERVE_DIST: "1", PORT: String(PORT), KAMBE_DB: dbPath, KAMBE_MODERATORS: modId },
     stdio: ["ignore", "inherit", "inherit"],
   });
   let browser: Browser | null = null;

@@ -43,17 +43,17 @@ export function registerMoments(d: MomentsDeps) {
   const canSee = (viewer: string, author: string) => viewer === author || d.areContacts(viewer, author);
 
   route("POST", "/api/moments", authed(async ({ req, user }) => {
-    d.limit(`moment-post:${user.id}`, 30, HOUR, "Terlalu banyak momen dalam satu jam.");
+    d.limit(`moment-post:${user.id}`, 30, HOUR, "Terlalu banyak jejak dalam satu jam.");
     // Satu salinan terenkripsi per kontak → body bisa besar; batas eksplisit cukup untuk MAX_MOMENT_COPIES
     // (temuan audit Fase 3 #2: batas default 32 KB membuat momen gagal untuk ±40+ kontak).
     const body = await d.readJson(req, MOMENT_BODY_MAX);
     const id = body.id;
     const fromKey = body.fromKey;
     const copies = body.copies;
-    if (typeof id !== "string" || !UUID_RE.test(id)) throw new HttpError(400, "bad_id", "ID momen tidak valid");
+    if (typeof id !== "string" || !UUID_RE.test(id)) throw new HttpError(400, "bad_id", "ID jejak tidak valid");
     if (!isValidPublicKey(fromKey) || fromKey !== user.public_key) throw new HttpError(409, "stale_device_key", "Akun ini aktif di perangkat lain");
     if (!Array.isArray(copies) || copies.length === 0 || copies.length > MAX_MOMENT_COPIES + 1) {
-      throw new HttpError(400, "bad_copies", `Salinan momen harus 1–${MAX_MOMENT_COPIES + 1}`);
+      throw new HttpError(400, "bad_copies", `Salinan jejak harus 1–${MAX_MOMENT_COPIES + 1}`);
     }
 
     const seen = new Set<string>();
@@ -67,7 +67,7 @@ export function registerMoments(d: MomentsDeps) {
         typeof c.nonce !== "string" || c.nonce.length !== NONCE_B64_LEN || !B64_RE.test(c.nonce) ||
         typeof c.ciphertext !== "string" || c.ciphertext.length === 0 || c.ciphertext.length > MOMENT_CT_MAX || !B64_RE.test(c.ciphertext)
       ) {
-        throw new HttpError(400, "bad_copy", "Format salinan momen tidak valid");
+        throw new HttpError(400, "bad_copy", "Format salinan jejak tidak valid");
       }
       seen.add(c.to);
       if (c.to === user.id) {
@@ -76,7 +76,7 @@ export function registerMoments(d: MomentsDeps) {
         continue;
       }
       // Hanya kontak aktif — momen tidak bisa "disemprotkan" ke orang asing.
-      if (!d.areContacts(user.id, c.to)) throw new HttpError(403, "not_contacts", "Momen hanya bisa dibagikan ke kontak");
+      if (!d.areContacts(user.id, c.to)) throw new HttpError(403, "not_contacts", "Jejak hanya bisa dibagikan ke kontak");
       if (d.getUser(c.to)?.public_key !== c.toKey) stale.push(c.to);
     }
     if (!hasSelf) throw new HttpError(400, "self_copy_required", "Sertakan salinan untuk dirimu sendiri");
@@ -84,7 +84,7 @@ export function registerMoments(d: MomentsDeps) {
 
     const now = Date.now();
     tx(db, () => {
-      if (db.prepare("SELECT 1 FROM moments WHERE id = ?").get(id)) throw new HttpError(409, "duplicate", "Momen sudah ada");
+      if (db.prepare("SELECT 1 FROM moments WHERE id = ?").get(id)) throw new HttpError(409, "duplicate", "Jejak sudah ada");
       db.prepare("INSERT INTO moments (id, author_id, author_key, created_at, expires_at) VALUES (?, ?, ?, ?, ?)").run(id, user.id, fromKey, now, now + MOMENT_TTL_MS);
       const ins = db.prepare("INSERT INTO moment_copies (moment_id, recipient_id, recipient_key, nonce, ciphertext) VALUES (?, ?, ?, ?, ?)");
       for (const c of copies as Row[]) ins.run(id, c.to as string, c.toKey as string, c.nonce as string, c.ciphertext as string);
@@ -135,7 +135,7 @@ export function registerMoments(d: MomentsDeps) {
     const m = db
       .prepare("SELECT m.author_id FROM moments m JOIN moment_copies c ON c.moment_id = m.id AND c.recipient_id = ? WHERE m.id = ? AND m.expires_at > ?")
       .get(user.id, params.id, Date.now()) as { author_id: string } | undefined;
-    if (!m || !canSee(user.id, m.author_id)) throw new HttpError(404, "not_found", "Momen tidak ditemukan");
+    if (!m || !canSee(user.id, m.author_id)) throw new HttpError(404, "not_found", "Jejak tidak ditemukan");
     if (emoji === null) db.prepare("DELETE FROM moment_reactions WHERE moment_id = ? AND user_id = ?").run(params.id, user.id);
     else
       db.prepare(
@@ -149,7 +149,7 @@ export function registerMoments(d: MomentsDeps) {
   route("DELETE", "/api/moments/:id", authed(({ user, params }) => {
     const recipients = (db.prepare("SELECT recipient_id FROM moment_copies WHERE moment_id = ?").all(params.id) as { recipient_id: string }[]).map((r) => r.recipient_id);
     const { changes } = db.prepare("DELETE FROM moments WHERE id = ? AND author_id = ?").run(params.id, user.id);
-    if (Number(changes) === 0) throw new HttpError(404, "not_found", "Momen tidak ditemukan");
+    if (Number(changes) === 0) throw new HttpError(404, "not_found", "Jejak tidak ditemukan");
     for (const r of recipients) d.emit(r, { t: "moments_changed" });
     return { ok: true };
   }));

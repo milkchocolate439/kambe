@@ -63,7 +63,7 @@ export function registerDiscovery(d: DiscoveryDeps) {
     const pin = tx(db, () => {
       const active = db.prepare("SELECT COUNT(*) AS n FROM shadow_pins WHERE user_id = ? AND kind = ? AND expires_at > ?").get(user.id, kind, now) as { n: number };
       if (active.n >= max) {
-        throw new HttpError(409, "too_many_shadow", `Maksimal ${max} ${kind === "once" ? "PIN sekali pakai" : "Shadow PIN"} aktif. Cabut salah satu dulu.`);
+        throw new HttpError(409, "too_many_shadow", `Maksimal ${max} ${kind === "once" ? "PIN sekali pakai" : "PIN Bayang"} aktif. Cabut salah satu dulu.`);
       }
       const p = d.uniquePin();
       const labelObject = body.sealedLabel ? d.sealed.store(body.sealedLabel, "label", user) : null;
@@ -84,7 +84,7 @@ export function registerDiscovery(d: DiscoveryDeps) {
     const row = db.prepare("SELECT label_object FROM shadow_pins WHERE pin = ? AND user_id = ? AND kind IN ('shadow', 'once')").get(params.pin, user.id) as
       | { label_object: string | null }
       | undefined;
-    if (!row) throw new HttpError(404, "not_found", "Shadow PIN tidak ditemukan");
+    if (!row) throw new HttpError(404, "not_found", "PIN Bayang tidak ditemukan");
     db.prepare("DELETE FROM shadow_pins WHERE pin = ?").run(params.pin);
     d.sealed.remove(row.label_object);
     // Undangan yang belum diterima lewat PIN ini ikut hangus — itulah gunanya mencabut.
@@ -108,7 +108,7 @@ export function registerDiscovery(d: DiscoveryDeps) {
     if (!(SECTORS as readonly string[]).includes(sector)) throw new HttpError(400, "bad_sector", "Sektor tidak dikenal");
     const headline = d.cleanText(d.str(body, "headline", { min: 1, max: RADAR_HEADLINE_MAX * 2 })).slice(0, RADAR_HEADLINE_MAX);
     if (headline.length < 10) throw new HttpError(400, "bad_headline", "Tulis kebutuhan/tawaranmu minimal 10 karakter");
-    d.limit(`radar-write:${user.id}`, 10, 24 * HOUR, "Radar terlalu sering diubah hari ini.");
+    d.limit(`radar-write:${user.id}`, 10, 24 * HOUR, "Radar Arwah terlalu sering diubah hari ini.");
     const now = Date.now();
     const expires = now + RADAR_TTL_MS;
     tx(db, () => {
@@ -138,8 +138,8 @@ export function registerDiscovery(d: DiscoveryDeps) {
   // Lihat radar: hanya untuk peserta aktif, sampel acak, tanpa id internal.
   route("GET", "/api/radar", authed(({ user, url }) => {
     const now = Date.now();
-    if (!myRadar(user.id, now)) throw new HttpError(403, "radar_optin_required", "Ikut radar dulu untuk melihat peserta lain (resiprokal demi keamanan).");
-    d.limit(`radar-view:${user.id}`, 60, HOUR, "Radar terlalu sering dimuat. Coba lagi nanti.");
+    if (!myRadar(user.id, now)) throw new HttpError(403, "radar_optin_required", "Ikut Radar Arwah dulu untuk melihat peserta lain (resiprokal demi keamanan).");
+    d.limit(`radar-view:${user.id}`, 60, HOUR, "Radar Arwah terlalu sering dimuat. Coba lagi nanti.");
     const sector = url.searchParams.get("sector");
     if (sector && !(SECTORS as readonly string[]).includes(sector)) throw new HttpError(400, "bad_sector", "Sektor tidak dikenal");
     const rows = db
