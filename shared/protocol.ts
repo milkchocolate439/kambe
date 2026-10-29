@@ -198,7 +198,7 @@ export type ServerEvent =
 
 export const PRO_PRICE = 49_000;
 export const PRO_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
-export const FEE_PER_MILLE = 50; // 5% — keputusan pemilik produk (bisa diubah: PINPATH_FEE_PER_MILLE)
+export const FEE_PER_MILLE = 50; // 5% — keputusan pemilik produk (bisa diubah: KAMBE_FEE_PER_MILLE)
 export const PRICE_MIN = 1_000;
 export const PRICE_MAX = 100_000_000;
 export const PRODUCT_TITLE_MAX = 80;

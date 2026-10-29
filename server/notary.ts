@@ -1,5 +1,5 @@
 // Notaris kuitansi: memegang kunci privat Ed25519 developer — HANYA di server, tidak pernah di ponsel.
-// Kunci dimuat dari PINPATH_NOTARY_KEY (PKCS8 base64) atau berkas data/notary.key (dibuat sekali, izin 0600).
+// Kunci dimuat dari KAMBE_NOTARY_KEY (nama lama PINPATH_NOTARY_KEY masih diterima; PKCS8 base64) atau berkas data/notary.key (dibuat sekali, izin 0600).
 
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";

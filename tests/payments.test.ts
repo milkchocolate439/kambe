@@ -23,7 +23,7 @@ async function gatewayMarket() {
   const gw = fakeGateway();
   const app = createApp({
     dbPath: ":memory:",
-    payments: xenditProvider({ secretKey: SECRET, callbackToken: TOKEN, splitRuleId: "splitru_fee25", successUrl: "https://pinpath.example/bayar-selesai", fetchImpl: gw.fetchImpl }),
+    payments: xenditProvider({ secretKey: SECRET, callbackToken: TOKEN, splitRuleId: "splitru_fee25", successUrl: "https://kambe.example/bayar-selesai", fetchImpl: gw.fetchImpl }),
   });
   await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", () => r()));
   const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
@@ -65,6 +65,7 @@ test("gateway: invoice dibuat DI SERVER dengan split ke sub-akun penjual; ponsel
   assert.equal(call.body.external_id, deal.payRef);
   assert.equal(call.body.amount, 4_000_000);
   assert.ok(!String(call.body.description).includes("Rotan"), "nama barang/identitas tidak dikirim ke gateway");
+  assert.equal(call.body.description, `KAMBE ${deal.payRef}`, "deskripsi di gateway hanya merek + kode referensi");
 
   // Klik ganda tidak membuat invoice kedua.
   await buyer.post(`/api/deals/${deal.id}/pay`);

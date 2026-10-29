@@ -126,7 +126,7 @@ export function createApp(opts: AppOptions) {
   // terdaftar bisa diserobot siapa pun lewat pendaftaran (temuan audit Fase 3 #1).
   const moderatorIdSet = new Set((opts.moderators ?? []).filter((id) => UUID_RE.test(id)));
   for (const bad of (opts.moderators ?? []).filter((id) => !UUID_RE.test(id))) {
-    log(`[peringatan] PINPATH_MODERATORS: "${bad}" bukan ID akun (UUID) — diabaikan. Cari ID dengan: node --import tsx scripts/moderator-id.ts <alias>`);
+    log(`[peringatan] KAMBE_MODERATORS: "${bad}" bukan ID akun (UUID) — diabaikan. Cari ID dengan: node --import tsx scripts/moderator-id.ts <alias>`);
   }
   const isModerator = (u: UserRow) => moderatorIdSet.has(u.id);
 

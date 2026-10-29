@@ -1,4 +1,9 @@
-# PINPath
+# KAMBE
+
+> *Hadir tanpa jejak.*
+
+*Kambe* adalah kata bahasa Dayak Ngaju untuk hantu/roh. Seperti kambe, kamu hadir tanpa nomor HP atau email.
+Pesanmu hanya singgah sebentar di server, lalu hilang. Hanya yang kamu izinkan yang bisa melihatmu.
 
 Messenger berbasis **PIN 6 karakter** ala BBM dengan **enkripsi end-to-end (E2EE) sungguhan**.
 Tanpa nomor HP, tanpa email. Arsitektur **local-first**: riwayat tinggal di perangkat, server hanya
@@ -7,7 +12,7 @@ Tanpa nomor HP, tanpa email. Arsitektur **local-first**: riwayat tinggal di pera
 > 📐 Struktur resmi & pemetaan terhadap konsep "Local Server User & Monetisasi Terdesentralisasi":
 > **[docs/ARSITEKTUR.md](docs/ARSITEKTUR.md)** — apa yang diadopsi, disesuaikan, dan ditolak (beserta alasannya).
 
-> Dikembangkan dari prototipe `pinpath_messenger_secret_social_commerce.html`. Prototipe itu
+> Sebelumnya bernama **PINPath**. Dikembangkan dari prototipe `pinpath_messenger_secret_social_commerce.html`. Prototipe itu
 > hanya memberi *label* "E2EE"; versi ini mengimplementasikannya, plus menutup celah XSS,
 > PIN `Math.random()`, identitas asli yang bocor ke browser, dan fee yang dihitung di klien.
 
@@ -19,20 +24,21 @@ pnpm dev            # API :3300 + Vite :5173 → buka http://127.0.0.1:5173
 pnpm build && pnpm start   # produksi: satu server di http://127.0.0.1:3300
 ```
 
-Variabel lingkungan (opsional):
+Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila keduanya diatur, `KAMBE_*` yang dipakai.
 
 | Variabel | Default | Fungsi |
 |---|---|---|
 | `PORT` / `HOST` | `3300` / `127.0.0.1` | Alamat server (default tidak terbuka ke jaringan) |
-| `PINPATH_DB` | `data/pinpath.db` | Lokasi database SQLite |
-| `PINPATH_SECURE` | – | `1` di balik HTTPS → cookie `Secure` + HSTS |
-| `PINPATH_TRUST_PROXY` | – | `1` hanya bila di belakang reverse proxy milik sendiri |
-| `PINPATH_ORIGINS` | – | Daftar Origin yang diizinkan (koma). Kosong = harus sama dengan Host |
-| `PINPATH_FEE_PER_MILLE` | `50` | Fee platform per seribu (**default 50 = 5%**; 25 = 2,5%; maks. 200). Tersimpan per kesepakatan saat dibuat |
-| `PINPATH_NOTARY_KEY` / `PINPATH_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
-| `PINPATH_PAYMENT_PROVIDER` | `simulasi` | `xendit` untuk gateway nyata (butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `PINPATH_PUBLIC_URL`, opsional `XENDIT_SPLIT_RULE_ID`) |
+| `KAMBE_DB` | `data/kambe.db` | Lokasi database SQLite. Bila `data/pinpath.db` (instalasi lama) sudah ada, berkas itu yang dipakai, jadi data tidak "hilang" |
+| `KAMBE_SECURE` | – | `1` di balik HTTPS → cookie `Secure` + HSTS |
+| `KAMBE_TRUST_PROXY` | – | `1` hanya bila di belakang reverse proxy milik sendiri |
+| `KAMBE_ORIGINS` | – | Daftar Origin yang diizinkan (koma). Kosong = harus sama dengan Host |
+| `KAMBE_FEE_PER_MILLE` | `50` | Fee platform per seribu (**default 50 = 5%**; 25 = 2,5%; maks. 200). Tersimpan per kesepakatan saat dibuat |
+| `KAMBE_NOTARY_KEY` / `KAMBE_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
+| `KAMBE_PAYMENT_PROVIDER` | `simulasi` | `xendit` untuk gateway nyata (butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `KAMBE_PUBLIC_URL`, opsional `XENDIT_SPLIT_RULE_ID`) |
+| `KAMBE_PUBLIC_URL` | – | Alamat publik aplikasi (tujuan kembali setelah bayar di gateway) |
 | `VITE_NOTARY_PUBLIC_KEY` | – | (saat build) kunci publik notaris yang ditanam di aplikasi/APK; tanpa ini klien mem-pin kunci saat pertama terlihat |
-| `PINPATH_MODERATORS` | – | **ID akun** (UUID) moderator sengketa, dipisah koma. Cari ID: `node --import tsx scripts/moderator-id.ts <alias>`. Alias sengaja tidak diterima (bisa diserobot lewat pendaftaran) |
+| `KAMBE_MODERATORS` | – | **ID akun** (UUID) moderator sengketa, dipisah koma. Cari ID: `node --import tsx scripts/moderator-id.ts <alias>`. Alias sengaja tidak diterima (bisa diserobot lewat pendaftaran) |
 
 > Catatan Kali/WSL: Node dari paket Kali dikompilasi tanpa dukungan TypeScript, jadi semua
 > skrip memakai `node --import tsx`.
@@ -40,8 +46,9 @@ Variabel lingkungan (opsional):
 ## Pengujian
 
 ```bash
-pnpm test           # 104 tes: kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
-                    # sengketa/moderator, Shadow PIN/radar, Moments, notaris (server sungguhan, DB di memori) + regresi red-team
+pnpm test           # kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
+                    # sengketa/moderator, PIN Bayang/Radar Arwah, Jejak, notaris (server sungguhan, DB di memori),
+                    # env KAMBE_*/PINPATH_*, kompatibilitas data era PINPath + regresi red-team
 pnpm build && pnpm test:browser   # 4 suite Chromium headless: chat, dagang+moderator, Fase 3, brankas perangkat
 ```
 
@@ -55,7 +62,7 @@ audit pelanggaran CSP, dan tata letak HP tanpa scroll horizontal. Screenshot di 
 |---|---|
 | Kunci identitas | X25519 diturunkan dari **frasa kunci** (seed 256-bit milik pengguna, tidak pernah ke server); dipakai sebagai CryptoKey **non-extractable** |
 | Data di perangkat | Riwayat, pin kunci, alamat yang diingat: AES-256-GCM per rekaman. Seed dibungkus passphrase (PBKDF2 600k). Keluar = kunci dihapus, data terkunci |
-| Cadangan | File `.pinpath` terenkripsi kunci turunan frasa kunci; dipulihkan di HP baru tanpa mengubah safety number |
+| Cadangan | File `.kambe` terenkripsi kunci turunan frasa kunci; dipulihkan di HP baru tanpa mengubah safety number. File `.pinpath` lama tetap bisa dipulihkan |
 | Isi selain chat | Status, catatan undangan, produk, judul/bukti kirim/pernyataan/putusan sengketa, label: *sealed object* multi-penerima (lihat `docs/ARSITEKTUR.md`) |
 | Kunci percakapan | HKDF-SHA256 dari ECDH; salt mengikat id + kunci publik kedua pihak |
 | Isi pesan | AES-256-GCM, nonce acak 96-bit, AAD mengikat id pesan + pengirim + penerima + kedua kunci (anti tukar/replay) |
@@ -109,26 +116,26 @@ pengguna hanya tersimpan sebagai ciphertext.
 - Hapus akun ditolak selama ada kesepakatan terbuka (dana pihak lain tidak ikut hilang). Diblokir di tengah jalan:
   pembayaran ditolak, tapi refund/konfirmasi tetap bisa.
 
-## Fase 3 — Moderator sengketa, Shadow PIN, Radar, Path Moments
+## Fase 3 — Moderator sengketa, PIN Bayang, Radar Arwah, Jejak
 
 **Bukti kirim & moderator**
 - "Kirim" wajib bukti: kurir dari daftar + nomor resi (6–40 huruf/angka), atau keterangan serah terima untuk
   "Diantar langsung"/"Jasa digital". Bukti terlihat pembeli & moderator.
 - Sengketa wajib alasan (tidak diterima / tidak sesuai / rusak / lainnya) + cerita. Kedua pihak bisa menambah
   maks. 5 pernyataan — **dibaca moderator, tidak terenkripsi E2EE** (diberi label jelas di UI).
-- Moderator (`PINPATH_MODERATORS=<id-akun>,…`) melihat data kesepakatan, bukti kirim, dan pernyataan —
+- Moderator (`KAMBE_MODERATORS=<id-akun>,…`) melihat data kesepakatan, bukti kirim, dan pernyataan —
   **bukan isi chat**. Putusan refund/cairkan wajib alasan (dibaca kedua pihak), final, atomik, tercatat di
   `moderation_log`. Moderator tidak bisa memutus kesepakatannya sendiri; panel tersembunyi (404) bagi pengguna biasa.
 - Sengketa yang kedaluwarsa (14 hari) dicatat sebagai putusan sistem yang bisa dibaca kedua pihak.
 
-**Shadow PIN (24 jam)** — PIN sementara untuk orang asing; maks. 3 aktif; bisa dicabut (undangan tertunda ikut hangus).
-Yang terhubung lewat Shadow PIN **tidak pernah melihat PIN utama** (kontak menampilkan PIN yang dipakai saat terhubung).
+**PIN Bayang (24 jam)** — PIN sementara untuk orang asing; maks. 3 aktif; bisa dicabut (undangan tertunda ikut hangus).
+Yang terhubung lewat PIN Bayang **tidak pernah melihat PIN utama** (kontak menampilkan PIN yang dipakai saat terhubung).
 
-**Radar ekonomi (opt-in, default mati)** — tampil 7 hari per sektor dengan kebutuhan/tawaran; hanya sesama peserta yang
+**Radar Arwah (radar ekonomi; opt-in, default mati)** — tampil 7 hari per sektor dengan kebutuhan/tawaran; hanya sesama peserta yang
 bisa melihat (resiprokal, anti-pengintip pasif); memakai **PIN radar khusus**; tanpa id internal; peserta yang diblokir
 atau sudah jadi kontak tidak tampil; keluar radar = PIN radar mati.
 
-**Path Moments (E2EE)** — pikiran/musik/tempat (nama, bukan GPS)/bangun/tidur. Setiap momen **dienkripsi terpisah
+**Jejak (E2EE; dulu "Path Moments", rute API tetap `/api/moments`)** — pikiran/musik/tempat (nama, bukan GPS)/bangun/tidur. Setiap momen **dienkripsi terpisah
 untuk tiap kontak** + salinan diri sendiri (`deriveSelfKey`), saluran AAD `moment` terpisah dari `msg` (ciphertext tidak
 bisa dipindah antar-saluran). Hanya kontak saat ini yang melihat; kontak dengan safety number berubah yang belum ditinjau
 tidak ikut dikirimi; terhapus otomatis setelah 30 hari. Reaksi 😊😮❤️ adalah metadata yang terlihat server.
@@ -137,5 +144,20 @@ tidak ikut dikirimi; terhapus otomatis setelah 30 hari. Reaksi 😊😮❤️ ad
 
 - **Fase 2b**: Double Ratchet (forward secrecy) + riwayat disimpan lokal di perangkat; lampiran terenkripsi (foto bukti sengketa).
 - **Fase 4**: APK (Capacitor), payment gateway berizin, notifikasi push.
-- **Fase 3**: Path Moments, Radar opt-in (default mati), Shadow PIN 24 jam.
+- **Fase 3**: Jejak, Radar Arwah opt-in (default mati), PIN Bayang 24 jam.
 - **Fase 4**: APK (Capacitor), payment gateway berizin (escrow/rekber memegang dana publik butuh izin BI + KYC/AML).
+
+## Label protokol yang dibekukan
+
+Nama aplikasi berganti dari PINPath ke KAMBE, tetapi label teknis di bawah ini **sengaja tidak diganti**.
+Label-label ini ikut masuk ke penurunan kunci (HKDF), AAD enkripsi, atau nama penyimpanan. Mengubahnya berarti
+kunci & safety number semua pengguna berubah, pesan/sealed object lama tidak bisa dibuka, dan file cadangan lama
+tidak bisa dipulihkan. `tests/kambe-compat.test.ts` menjaga agar label ini tetap sama.
+
+| Label | Lokasi | Dipakai untuk |
+|---|---|---|
+| `PROTOCOL = "pinpath/v1"` | `shared/e2ee.ts` | Label HKDF/AAD pesan, sealed object, kunci brankas |
+| `BACKUP_FORMAT = "pinpath-backup"` | `shared/vault.ts` | Penanda format & AAD file cadangan (`.kambe` maupun `.pinpath`) |
+| `RECEIPT_KIND = "pinpath.deal-receipt"` | `shared/receipt.ts` | Isi yang ditandatangani notaris pada kuitansi |
+| `hashSecret("pinpath-dummy-secret")` | `server/security.ts` | Hash tiruan anti timing-attack saat alias tidak ada |
+| IndexedDB `"pinpath"` | `client/src/lib/keystore.ts` | Nama database lokal di perangkat; mengganti = riwayat & brankas lama tidak terlihat |

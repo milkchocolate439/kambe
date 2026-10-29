@@ -585,7 +585,7 @@ export function registerCommerce(d: CommerceDeps) {
           dealId: r.id as string,
           payRef: r.pay_ref as string,
           amount: r.price as number,
-          description: `PINPath ${r.pay_ref as string}`, // tanpa nama barang/identitas di gateway
+          description: `KAMBE ${r.pay_ref as string}`, // tanpa nama barang/identitas di gateway
           sellerAccount: (seller as (UserRow & { gateway_account?: string | null }) | undefined)?.gateway_account ?? null,
         });
       } catch (e) {

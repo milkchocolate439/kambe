@@ -14,7 +14,7 @@ test("PRO: gateway sungguhan menolak aktivasi tanpa pembayaran (402)", async () 
       secretKey: "xnd_development_X",
       callbackToken: "t",
       splitRuleId: "r",
-      successUrl: "https://pinpath.example/ok",
+      successUrl: "https://kambe.example/ok",
       fetchImpl: (async () => new Response("{}", { status: 200 })) as unknown as typeof fetch,
     }),
   });

@@ -1,8 +1,8 @@
 {
-  "name": "pinpath",
+  "name": "kambe",
   "version": "0.1.0",
   "private": true,
-  "description": "PINPath — messenger berbasis PIN dengan enkripsi end-to-end (E2EE); server hanya melihat ciphertext.",
+  "description": "KAMBE — messenger berbasis PIN dengan enkripsi end-to-end (E2EE); server hanya melihat ciphertext.",
   "type": "module",
   "engines": {
     "node": ">=24"

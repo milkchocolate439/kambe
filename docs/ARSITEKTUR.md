@@ -1,6 +1,10 @@
-# Arsitektur PINPath — Local-First + Relay Ringan + Notaris Pembayaran
+# Arsitektur KAMBE — Local-First + Relay Ringan + Notaris Pembayaran
 
-Dokumen ini meluruskan struktur PINPath terhadap konsep **"Local Server User & Monetisasi Developer
+> *Hadir tanpa jejak.* Seperti kambe, kamu hadir tanpa nomor HP atau email. Pesanmu hanya singgah sebentar
+> di server, lalu hilang. Hanya yang kamu izinkan yang bisa melihatmu.
+> (KAMBE sebelumnya bernama PINPath; label protokol lama sengaja dibekukan, lihat §6.)
+
+Dokumen ini meluruskan struktur KAMBE terhadap konsep **"Local Server User & Monetisasi Developer
 Terdesentralisasi"** (`konsep_arsitektur_dan_logika_monetisasi (1).md`). Setiap butir konsep dipetakan:
 **diadopsi**, **disesuaikan**, atau **ditolak**, beserta alasannya. Prinsip penentu: keselamatan pengguna →
 kepatuhan hukum Indonesia → kenyamanan → kesederhanaan.
@@ -26,9 +30,9 @@ kepatuhan hukum Indonesia → kenyamanan → kesederhanaan.
                      Payment gateway berizin (split otomatis: penjual / fee developer)
 ```
 
-## 2. Pemetaan konsep → PINPath
+## 2. Pemetaan konsep → KAMBE
 
-| Konsep dokumen | Keputusan | Implementasi di PINPath |
+| Konsep dokumen | Keputusan | Implementasi di KAMBE |
 |---|---|---|
 | Database & state lokal di ponsel | **Diadopsi** | Riwayat chat & momen disimpan di IndexedDB perangkat (`client/src/lib/localstore.ts`). Server bukan arsip. |
 | Relay ringan (tanpa logika bisnis/penyimpanan) | **Diadopsi untuk pesan** | Ciphertext dihapus dari server segera setelah penerima mengonfirmasi terima (`delivered`), atau setelah 30 hari bila tak pernah terkirim. |
@@ -41,9 +45,9 @@ kepatuhan hukum Indonesia → kenyamanan → kesederhanaan.
 | "Tanda tangan dengan Developer **Public** Key" | **Diperbaiki** | Tanda tangan butuh **kunci privat** — kunci itu disimpan di server (notaris), *tidak pernah* di ponsel. Ponsel memverifikasi dengan kunci publik notaris. |
 | Validasi silang pembeli–penjual untuk menegakkan fee | **Disesuaikan** | Dua pihak yang bersekongkol selalu bisa bertransaksi di luar aplikasi; fee hanya bisa ditegakkan bila **uang mengalir lewat gateway**. Validasi silang tetap dipakai untuk mencegah *pemalsuan kuitansi* (kuitansi tanpa tanda tangan notaris ditolak klien). |
 | HD wallet / master seed | **Diadopsi bertahap** | Tahap berikut: frasa pemulihan → kunci identitas deterministik, agar pindah ponsel tidak mengubah safety number. |
-| PIN dinamis (TOTP per N detik) | **Disesuaikan** | TOTP butuh rahasia bersama, sehingga orang asing tak bisa menemukanmu. Penggantinya: **PIN sekali pakai** (hangus setelah 1 undangan), **Shadow PIN 24 jam**, **PIN radar**, dan **rotasi PIN utama otomatis**. Kontak hanya melihat PIN yang mereka pakai → PIN berbeda tidak bisa dikaitkan oleh sesama pengguna. |
+| PIN dinamis (TOTP per N detik) | **Disesuaikan** | TOTP butuh rahasia bersama, sehingga orang asing tak bisa menemukanmu. Penggantinya: **PIN sekali pakai** (hangus setelah 1 undangan), **PIN Bayang 24 jam**, **PIN Radar Arwah**, dan **rotasi PIN utama otomatis**. Kontak hanya melihat PIN yang mereka pakai → PIN berbeda tidak bisa dikaitkan oleh sesama pengguna. |
 | Stealth address / one-time payment code | **Disesuaikan** | Setiap kesepakatan memakai **kode referensi bayar sekali pakai** yang tidak memuat identitas; kuitansi hanya berisi alias saat transaksi. |
-| Fee 5% (dokumen) | **Diadopsi (keputusan pemilik)** | Default **5%** (`FEE_PER_MILLE = 50`); tetap bisa diubah dengan `PINPATH_FEE_PER_MILLE` (25 = 2,5%, 50 = 5%, maks. 200). Fee tersimpan di setiap kesepakatan saat dibuat, jadi perubahan tarif tidak mengubah kesepakatan lama. |
+| Fee 5% (dokumen) | **Diadopsi (keputusan pemilik)** | Default **5%** (`FEE_PER_MILLE = 50`); tetap bisa diubah dengan `KAMBE_FEE_PER_MILLE` (nama lama `PINPATH_*` masih diterima) (25 = 2,5%, 50 = 5%, maks. 200). Fee tersimpan di setiap kesepakatan saat dibuat, jadi perubahan tarif tidak mengubah kesepakatan lama. |
 
 ## 3. Apa yang diketahui server (setelah penyelarasan)
 
@@ -55,11 +59,11 @@ tanpa kunci untuk membukanya.
 | Isi | Cara dilindungi | Siapa yang bisa membaca |
 |---|---|---|
 | Pesan chat & PING | E2EE X25519 → AES-256-GCM per percakapan | Kedua pihak |
-| Momen | E2EE per penerima | Kontak yang dipilih penulis |
+| Jejak (momen) | E2EE per penerima | Kontak yang dipilih penulis |
 | Identitas pengiriman (nama/alamat) | Dikirim sebagai pesan E2EE | Penjual |
 | Status pribadi (PM) | Sealed object `pm` | Kontak dengan safety number yang dipercaya |
 | Catatan undangan | Sealed object `note` | Pemilik PIN tujuan |
-| Label Shadow PIN | Sealed object `label` | Pemilik saja |
+| Label PIN Bayang | Sealed object `label` | Pemilik saja |
 | Judul, deskripsi & sektor produk | Sealed object `product` | Kontak penjual |
 | Judul kesepakatan | Sealed object `deal` | Pembeli, penjual & moderator |
 | Bukti kirim (kurir/resi/catatan) | Sealed object `shipment` | Pembeli, penjual & moderator |
@@ -88,7 +92,7 @@ Aturan di server:
 | Alias, PIN, kunci publik | Direktori untuk saling menemukan |
 | Siapa berteman dengan siapa, waktu & status kirim | Metadata routing relay |
 | Harga, fee, status kesepakatan, buku besar | Fee 5% & rekber ditegakkan di server; harus bisa diaudit |
-| Iklan radar (citra) | Memang publik bagi peserta radar |
+| Iklan Radar Arwah (citra) | Memang publik bagi peserta radar |
 | Pilihan putusan moderator (refund/release) | Menggerakkan uang |
 
 ### 3b. Di perangkat: brankas & frasa kunci (Tahap 2)
@@ -102,7 +106,7 @@ Aturan di server:
 | Riwayat, pin kunci kontak, alamat yang diingat, pin notaris, seq kuitansi | Dienkripsi per rekaman di IndexedDB. AAD mengikat kunci rekaman, jadi rekaman tidak bisa ditukar. Yang polos hanya (pemilik, lawan, waktu) untuk pengurutan. |
 | **Keluar** | Kunci yang sedang terbuka dihapus. Di disk hanya tersisa brankas berpassphrase + ciphertext. Masuk lagi dengan passphrase membuka kembali riwayat. |
 | Muat ulang halaman | Kunci terbuka (CryptoKey non-extractable) tetap ada selama sesi, jadi tidak perlu mengetik passphrase lagi. |
-| **Cadangan** | File `.pinpath` dienkripsi dengan kunci cadangan, terikat ke akun dan waktu pembuatan. File disimpan pengguna sendiri, tidak diunggah ke server. Bisa dipulihkan di HP baru dengan frasa yang sama, atau dengan frasa lama setelah "mulai baru". |
+| **Cadangan** | File `.kambe` dienkripsi dengan kunci cadangan, terikat ke akun dan waktu pembuatan. File disimpan pengguna sendiri, tidak diunggah ke server. Bisa dipulihkan di HP baru dengan frasa yang sama, atau dengan frasa lama setelah "mulai baru". File `.pinpath` dari era PINPath tetap bisa dipulihkan (format di dalamnya sama). |
 | Migrasi data lama | Riwayat/pin polos dari sebelum Tahap 2 dienkripsi ulang otomatis. Alamat polos di `localStorage` dipindah ke brankas lalu dihapus. Kunci perangkat acak lama dibuang. |
 
 Batas yang jujur:
@@ -114,7 +118,7 @@ Batas yang jujur:
 
 | Data | Disimpan server? |
 |---|---|
-| Isi pesan, momen, identitas pengiriman | Tidak pernah (E2EE) |
+| Isi pesan, Jejak, identitas pengiriman | Tidak pernah (E2EE) |
 | Ciphertext pesan | Hanya sampai terkirim (maks. 30 hari bila penerima tak pernah online) |
 | Isi lain (status, catatan, produk, judul, bukti kirim, pernyataan, putusan, label) | Hanya ciphertext (sealed object) |
 | Alias, PIN, kunci publik, kontak, blokir | Ya (direktori) |
@@ -147,8 +151,9 @@ Server ──(6) kuitansi bertanda tangan Ed25519──▶ kedua ponsel (diverif
 | Lapisan | Berkas |
 |---|---|
 | Relay & direktori | `server/app.ts` (auth, kontak, WebSocket, store-and-forward) |
-| Penemuan aman (Shadow/sekali pakai/radar) | `server/discovery.ts` |
-| Momen E2EE | `server/moments.ts` |
+| Penemuan aman (PIN Bayang/sekali pakai/Radar Arwah) | `server/discovery.ts` |
+| Jejak E2EE (rute API tetap `/api/moments`) | `server/moments.ts` |
+| Konfigurasi env (`KAMBE_*`, fallback `PINPATH_*`) | `server/env.ts` |
 | Rekber, buku besar, sengketa | `server/commerce.ts` |
 | Notaris kuitansi | `server/notary.ts`, `shared/receipt.ts` |
 | Penyedia pembayaran | `server/payments.ts` |
@@ -156,3 +161,25 @@ Server ──(6) kuitansi bertanda tangan Ed25519──▶ kedua ponsel (diverif
 | Penyimpanan sealed object | `server/sealed.ts` |
 | Mesin lokal klien | `client/src/lib/messenger.ts`, `client/src/lib/keystore.ts` |
 | Brankas & frasa kunci | `shared/vault.ts`, `client/src/lib/device.ts`, `client/src/ui/Vault.tsx` |
+
+## 6. Label protokol yang dibekukan
+
+Rebrand PINPath → KAMBE hanya mengganti nama yang terlihat pengguna. Nama fitur juga berganti
+(Moments → **Jejak**, Shadow PIN → **PIN Bayang**, Radar → **Radar Arwah**), tetapi nama rute API, identifier
+kode, skema DB, dan berkas `data/pinpath.db` instalasi lama **tidak** diganti.
+
+Label di bawah ini ikut masuk ke penurunan kunci (HKDF), AAD enkripsi, isi yang ditandatangani, atau nama
+penyimpanan. Mengubah satu saja berarti kunci & safety number berubah, pesan dan sealed object lama tidak bisa
+dibuka, kuitansi lama gagal diverifikasi, dan cadangan lama tidak bisa dipulihkan. Karena itu dibekukan dan
+dijaga oleh `tests/kambe-compat.test.ts` (memakai data contoh era PINPath di `tests/fixtures/pre-kambe.json`).
+
+| Label | Lokasi | Dipakai untuk |
+|---|---|---|
+| `PROTOCOL = "pinpath/v1"` | `shared/e2ee.ts` | Label HKDF/AAD pesan, sealed object, kunci brankas |
+| `BACKUP_FORMAT = "pinpath-backup"` | `shared/vault.ts` | Penanda format & AAD file cadangan (`.kambe` maupun `.pinpath`) |
+| `RECEIPT_KIND = "pinpath.deal-receipt"` | `shared/receipt.ts` | Isi kuitansi yang ditandatangani notaris |
+| `hashSecret("pinpath-dummy-secret")` | `server/security.ts` | Hash tiruan anti timing-attack saat alias tidak ada |
+| IndexedDB `"pinpath"` | `client/src/lib/keystore.ts` | Database lokal perangkat; mengganti = riwayat & brankas lama tidak terlihat |
+
+Env juga kompatibel ke belakang: server membaca `KAMBE_<NAMA>` lebih dulu, lalu `PINPATH_<NAMA>`
+(`server/env.ts`). Tanpa `KAMBE_DB`, server memakai `data/pinpath.db` bila sudah ada, selain itu `data/kambe.db`.
