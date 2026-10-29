@@ -318,7 +318,7 @@ export function Chat() {
               e.target.style.height = `${Math.min(160, e.target.scrollHeight)}px`;
             }}
             onKeyDown={onKey}
-            placeholder={blocker ? "Belum bisa mengirim" : "Tulis pesan terenkripsi…"}
+            placeholder={blocker ? "Belum bisa mengirim" : "Tulis pesan…"}
             aria-label="Tulis pesan"
             disabled={!!blocker}
             maxLength={MAX_CHARS + 200}

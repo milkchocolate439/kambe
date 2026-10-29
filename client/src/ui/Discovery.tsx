@@ -147,7 +147,7 @@ export function RadarCard() {
 
   return (
     <section className="card">
-      <button className="row" style={{ width: "100%", background: "none", border: 0, padding: 0, textAlign: "left" }} onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button className="row" style={{ width: "100%", minHeight: 44, background: "none", border: 0, padding: 0, textAlign: "left" }} onClick={() => setOpen(!open)} aria-expanded={open}>
         <h3 style={{ margin: 0 }} className="grow">
           <Icon name="store" size={14} /> Radar Arwah
         </h3>

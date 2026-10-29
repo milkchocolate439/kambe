@@ -151,6 +151,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 360px minmax(0, 1fr); }
 .sidebar, .main { min-width: 0; }
 .sidebar { min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); background: var(--bg-2); padding: 14px; display: flex; flex-direction: column; gap: 14px; padding-bottom: calc(14px + var(--safe-bottom)); }
+.sidebar > * { flex-shrink: 0; } /* kartu tidak boleh dipepetkan; sidebar yang menggulir */
 .main { min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 
 @media (max-width: 820px) {
@@ -223,9 +224,11 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 /* Status (✓ / D / R / ⌛) selalu memakai lebar tetap agar sejajar dengan waktu dan antarbaris */
 .status { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 16px; font-family: var(--mono); font-weight: 800; padding: 0 4px; border-radius: 4px; background: rgb(0 0 0 / 0.22); }
 .status.R { color: var(--arwah); }
-.mine .status { background: rgb(0 0 0 / 0.16); }
+/* Di atas merah api, latar gelap menurunkan kontras tinta gelap (3,4:1) — pakai latar terang. */
+.mine .status { background: rgb(255 255 255 / 0.2); }
 .mine .status.R { color: var(--bubble-me-ink); }
-.mine .meta { opacity: 0.85; } /* ≥4,5:1 di atas merah api untuk teks 11px */
+.mine .status.failed { color: var(--danger); background: var(--bg); }
+.mine .meta { opacity: 1; } /* tinta penuh: 5,3:1 untuk teks 11px */
 .status.failed { color: #fecaca; background: rgb(220 38 38 / 0.5); }
 .scam { margin-top: 6px; font-size: 12px; font-style: normal; color: var(--warn); display: flex; gap: 6px; align-items: flex-start; }
 .ping-pill { align-self: center; margin: 6px 0; padding: 5px 14px; border-radius: 999px; background: var(--rose-bg); color: var(--rose); font-weight: 800; letter-spacing: 0.12em; font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
@@ -314,17 +317,18 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 @media (prefers-reduced-motion: reduce) { .motif::before { background: none; } }
 @media (prefers-reduced-data: reduce) { .motif::before { background: none; } }
 
-/* ---------- HP (≤ 820px): target sentuh 40–44px, layout rapat tapi lega ---------- */
+/* ---------- HP (≤ 820px): semua target sentuh ≥ 44px (diuji tests/browser/audit-e2e.ts) ---------- */
 @media (max-width: 820px) {
-  .btn { min-height: 44px; }
-  .btn.small { min-height: 40px; }
-  .btn.icon { width: 40px; min-height: 40px; }
+  .btn { min-height: 44px; min-width: 44px; }
+  .btn.small { min-height: 44px; }
+  .btn.icon { width: 44px; min-height: 44px; }
   .input, .textarea { min-height: 44px; }
-  .contact-field .input { min-height: 40px; }
-  .tabs button { min-height: 40px; }
-  .topbar { gap: 6px; }
-  .topbar .badge.pin { min-height: 40px; }
-  .verify-link { min-height: 40px; }
+  .contact-field .input { min-height: 44px; }
+  .tabs button { min-height: 44px; }
+  .topbar { gap: 4px; }
+  .topbar .badge.pin { min-height: 44px; }
+  .verify-link { min-height: 44px; }
+  .pin-big { min-height: 44px; }
   .sidebar { padding: 12px; padding-bottom: calc(12px + var(--safe-bottom)); gap: 12px; }
   .sidebar .card { padding: 12px; }
   .switch { width: 44px; height: 44px; }
