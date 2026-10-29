@@ -3,6 +3,7 @@ import { ALIAS_RE, PASSPHRASE_MIN, type Me } from "../../../shared/protocol.ts";
 import { api, ApiError } from "../lib/api.ts";
 import { copyText } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+import { Logo, Wordmark } from "./Logo.tsx";
 
 type Mode = "login" | "signup" | "recover";
 export type AuthKind = Mode;
@@ -65,13 +66,16 @@ export function Auth({ onAuthed, notice, initialAlias }: { onAuthed: (me: Me, pa
   }
 
   return (
-    <div className="auth">
+    <div className="auth motif">
       <div className="auth-card">
         <div className="hero-mark">
-          <Icon name="mask" size={44} strokeWidth={1.6} />
-          <div className="hero-name">PINPath</div>
-          <h1 className="hero-title">Mulai Obrolan Rahasia</h1>
+          <Logo size={72} />
+          <Wordmark className="hero-name" />
+          <h1 className="hero-title">Hadir tanpa jejak.</h1>
           <div className="small muted">Messenger PIN terenkripsi end-to-end</div>
+          <p className="small" style={{ margin: "8px 0 0", color: "var(--text-2)", maxWidth: 360 }}>
+            Seperti kambe, kamu hadir tanpa nomor HP atau email. Pesanmu hanya singgah sebentar di server, lalu hilang. Hanya yang kamu izinkan yang bisa melihatmu.
+          </p>
         </div>
 
         <div className="card">
@@ -160,7 +164,7 @@ export function Auth({ onAuthed, notice, initialAlias }: { onAuthed: (me: Me, pa
           {mode === "signup" && (
             <div className="features">
               <div><Icon name="check" size={16} /> Tanpa nomor HP, email, atau KTP.</div>
-              <div><Icon name="check" size={16} /> Pesan dikunci di perangkatmu — server PINPath tidak bisa membacanya.</div>
+              <div><Icon name="check" size={16} /> Pesan dikunci di perangkatmu — server KAMBE tidak bisa membacanya.</div>
               <div><Icon name="check" size={16} /> Orang asing harus kamu setujui dulu sebelum bisa mengirim pesan.</div>
             </div>
           )}
@@ -176,10 +180,10 @@ function RecoveryCodeScreen({ code, onDone }: { code: string; onDone: () => void
   const [copied, setCopied] = useState(false);
 
   function download() {
-    const blob = new Blob([`Kode pemulihan PINPath\n\n${code}\n\nSimpan di tempat aman. Siapa pun yang memegang kode ini + alias kamu bisa mengambil alih akun.\n`], { type: "text/plain" });
+    const blob = new Blob([`Kode pemulihan KAMBE\n\n${code}\n\nSimpan di tempat aman. Siapa pun yang memegang kode ini + alias kamu bisa mengambil alih akun.\n`], { type: "text/plain" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "pinpath-kode-pemulihan.txt";
+    a.download = "kambe-kode-pemulihan.txt";
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
@@ -192,7 +196,7 @@ function RecoveryCodeScreen({ code, onDone }: { code: string; onDone: () => void
           <h2 style={{ margin: 0, fontSize: 18 }}>Simpan kode pemulihan</h2>
         </div>
         <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>
-          PINPath tidak menyimpan nomor HP atau email, jadi <strong>kode ini satu-satunya cara</strong> masuk lagi kalau kamu lupa passphrase. Kode hanya ditampilkan sekali.
+          KAMBE tidak menyimpan nomor HP atau email, jadi <strong>kode ini satu-satunya cara</strong> masuk lagi kalau kamu lupa passphrase. Kode hanya ditampilkan sekali.
         </p>
         <div className="recovery" aria-label="Kode pemulihan">{code}</div>
         <div className="row">
@@ -208,7 +212,7 @@ function RecoveryCodeScreen({ code, onDone }: { code: string; onDone: () => void
           Saya sudah menyimpan kode ini di tempat aman (bukan di chat).
         </label>
         <button className="btn primary block" disabled={!saved} onClick={onDone}>
-          Lanjut ke PINPath
+          Lanjut ke KAMBE
         </button>
       </div>
     </div>

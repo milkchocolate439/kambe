@@ -1,4 +1,4 @@
-// Fase 3 — Shadow PIN & radar ekonomi (opt-in).
+// Fase 3 — PIN Bayang (Shadow PIN) & Radar Arwah (radar ekonomi, opt-in).
 import { useEffect, useState } from "react";
 import { MAX_ACTIVE_ONCE, MAX_ACTIVE_SHADOW, RADAR_HEADLINE_MAX, SECTORS, type LabelContent } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
@@ -26,7 +26,7 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
   const activeOfKind = pins?.filter((p) => p.kind === (once ? "once" : "shadow")).length ?? 0;
 
   useEffect(() => {
-    void m.loadShadowPins().catch(() => setError("Gagal memuat Shadow PIN"));
+    void m.loadShadowPins().catch(() => setError("Gagal memuat PIN Bayang"));
   }, [m]);
 
   async function run(fn: () => Promise<unknown>, ok?: string) {
@@ -43,20 +43,20 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="Shadow PIN" onClose={onClose}>
+    <Modal title="PIN Bayang" onClose={onClose}>
       <div className="stack">
         <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>
-          PIN sementara (24 jam) untuk dibagikan ke orang asing — misalnya di grup jual-beli. Orang yang terhubung lewat Shadow PIN <strong>tidak pernah melihat PIN utamamu</strong>. Cabut kapan saja; undangan yang belum kamu terima ikut hangus.
+          PIN sementara (24 jam) untuk dibagikan ke orang asing — misalnya di grup jual-beli. Orang yang terhubung lewat PIN Bayang <strong>tidak pernah melihat PIN Kambe utamamu</strong>. Cabut kapan saja; undangan yang belum kamu terima ikut hangus.
         </p>
         {pins === null ? (
           <div className="hint">Memuat…</div>
         ) : pins.length === 0 ? (
-          <div className="hint">Belum ada Shadow PIN aktif.</div>
+          <div className="hint">Belum ada PIN Bayang aktif.</div>
         ) : (
           <div className="list">
             {pins.map((p) => (
               <div key={p.pin} className="row" style={{ padding: "8px 4px", borderBottom: "1px solid var(--line)" }}>
-                <button className="pin-big" style={{ fontSize: 20, background: "none", border: 0, padding: 0 }} onClick={async () => (await copyText(p.pin)) && m.toast(`Shadow PIN ${p.pin} disalin`, "ok")} aria-label={`Salin Shadow PIN ${p.pin}`}>
+                <button className="pin-big" style={{ fontSize: 20, background: "none", border: 0, padding: 0 }} onClick={async () => (await copyText(p.pin)) && m.toast(`PIN Bayang ${p.pin} disalin`, "ok")} aria-label={`Salin PIN Bayang ${p.pin}`}>
                   {p.pin}
                 </button>
                 <div className="grow">
@@ -70,7 +70,7 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
                   </div>
                   <div className="tiny muted">Mati {remaining(p.expiresAt)} ({timeOf(p.expiresAt)}){p.kind === "once" ? " atau setelah dipakai sekali" : ""}</div>
                 </div>
-                <button className="btn small danger" disabled={busy} onClick={() => void run(() => m.revokeShadowPin(p.pin), `Shadow PIN ${p.pin} dicabut`)}>
+                <button className="btn small danger" disabled={busy} onClick={() => void run(() => m.revokeShadowPin(p.pin), `PIN Bayang ${p.pin} dicabut`)}>
                   Cabut
                 </button>
               </div>
@@ -86,7 +86,7 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
               </span>
             </label>
             <div className="row">
-              <input className="input grow" maxLength={40} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (opsional), mis. Grup FB Rotan" aria-label="Label Shadow PIN" />
+              <input className="input grow" maxLength={40} value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (opsional), mis. Grup FB Rotan" aria-label="Label PIN Bayang" />
               <button
                 className="btn primary"
                 disabled={busy || activeOfKind >= (once ? MAX_ACTIVE_ONCE : MAX_ACTIVE_SHADOW)}
@@ -94,7 +94,7 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
                   void run(async () => {
                     const p = await m.createShadowPin(label.trim(), once);
                     setLabel("");
-                    if (await copyText(p.pin)) m.toast(`${once ? "PIN sekali pakai" : "Shadow PIN"} ${p.pin} dibuat & disalin`, "ok");
+                    if (await copyText(p.pin)) m.toast(`${once ? "PIN sekali pakai" : "PIN Bayang"} ${p.pin} dibuat & disalin`, "ok");
                   })
                 }
               >
@@ -104,7 +104,7 @@ export function ShadowPinModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
         <span className="hint">
-          Maksimal {MAX_ACTIVE_SHADOW} Shadow PIN dan {MAX_ACTIVE_ONCE} PIN sekali pakai aktif sekaligus.
+          Maksimal {MAX_ACTIVE_SHADOW} PIN Bayang dan {MAX_ACTIVE_ONCE} PIN sekali pakai aktif sekaligus.
         </span>
         {error && <span className="error" role="alert">{error}</span>}
       </div>
@@ -129,7 +129,7 @@ export function RadarCard() {
     if (open && mine === undefined) void m.loadMyRadar().catch(() => {});
   }, [open, mine, m]);
   useEffect(() => {
-    if (open && mine) void m.loadRadar(filter || null).catch((e) => setError(e instanceof ApiError ? e.message : "Gagal memuat radar"));
+    if (open && mine) void m.loadRadar(filter || null).catch((e) => setError(e instanceof ApiError ? e.message : "Gagal memuat Radar Arwah"));
   }, [open, mine, filter, m]);
 
   async function run(key: string, fn: () => Promise<unknown>, ok?: string) {
@@ -149,7 +149,7 @@ export function RadarCard() {
     <section className="card">
       <button className="row" style={{ width: "100%", background: "none", border: 0, padding: 0, textAlign: "left" }} onClick={() => setOpen(!open)} aria-expanded={open}>
         <h3 style={{ margin: 0 }} className="grow">
-          <Icon name="store" size={14} /> Radar ekonomi
+          <Icon name="store" size={14} /> Radar Arwah
         </h3>
         <span className={`badge ${mine ? "ok" : ""}`}>{mine ? "Aktif" : "Mati"}</span>
       </button>
@@ -161,7 +161,7 @@ export function RadarCard() {
             <>
               {!mine && (
                 <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>
-                  Temukan mitra dagang sesuai sektor. <strong>Hanya sesama peserta radar</strong> yang bisa melihatmu, yang tampil adalah <strong>PIN radar khusus</strong> (bukan PIN utama), dan radar mati otomatis setelah 7 hari. Undangan tetap harus kamu setujui.
+                  Temukan mitra dagang sesuai sektor. <strong>Hanya sesama peserta Radar Arwah</strong> yang bisa melihatmu, yang tampil adalah <strong>PIN radar khusus</strong> (bukan PIN utama), dan kamu hilang dari radar otomatis setelah 7 hari. Undangan tetap harus kamu setujui.
                 </p>
               )}
               <select className="input" value={sector} onChange={(e) => setSector(e.target.value)} aria-label="Sektor radar">
@@ -179,10 +179,10 @@ export function RadarCard() {
                     void run("join", async () => {
                       await m.joinRadar(sector, headline.trim());
                       setEditing(false);
-                    }, mine ? "Radar diperbarui (7 hari)" : "Kamu tampil di radar selama 7 hari")
+                    }, mine ? "Radar Arwah diperbarui (7 hari)" : "Kamu tampil di Radar Arwah selama 7 hari")
                   }
                 >
-                  {mine ? "Simpan & perpanjang" : "Ikut radar 7 hari"}
+                  {mine ? "Simpan & perpanjang" : "Ikut Radar Arwah 7 hari"}
                 </button>
               </div>
             </>
@@ -195,8 +195,8 @@ export function RadarCard() {
               </div>
               <div className="row">
                 <button className="btn small grow" onClick={() => { setSector(mine.sector); setHeadline(mine.headline); setEditing(true); }}>Ubah / perpanjang</button>
-                <button className="btn small danger grow" disabled={busy !== null} onClick={() => void run("leave", () => m.leaveRadar(), "Kamu keluar dari radar. PIN radar dimatikan.")}>
-                  Keluar radar
+                <button className="btn small danger grow" disabled={busy !== null} onClick={() => void run("leave", () => m.leaveRadar(), "Kamu keluar dari Radar Arwah. PIN radar dimatikan.")}>
+                  Keluar Radar Arwah
                 </button>
               </div>
               <div className="divider" />
@@ -207,7 +207,7 @@ export function RadarCard() {
                     <option key={x}>{x}</option>
                   ))}
                 </select>
-                <button className="btn ghost icon" onClick={() => void m.loadRadar(filter || null).catch(() => {})} aria-label="Acak ulang radar" title="Acak ulang">
+                <button className="btn ghost icon" onClick={() => void m.loadRadar(filter || null).catch(() => {})} aria-label="Acak ulang Radar Arwah" title="Acak ulang">
                   <Icon name="refresh" />
                 </button>
               </div>
@@ -230,7 +230,7 @@ export function RadarCard() {
                         <button
                           className="btn small primary"
                           disabled={busy !== null}
-                          onClick={() => void run(e.pin, () => m.invite(e.pin, `Dari radar: ${mine.headline}`.slice(0, 120)), `Undangan terkirim ke ${e.alias}`)}
+                          onClick={() => void run(e.pin, () => m.invite(e.pin, `Dari Radar Arwah: ${mine.headline}`.slice(0, 120)), `Undangan terkirim ke ${e.alias}`)}
                         >
                           <Icon name="userPlus" size={14} /> Undang
                         </button>

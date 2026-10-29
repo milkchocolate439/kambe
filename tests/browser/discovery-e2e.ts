@@ -1,4 +1,4 @@
-// Uji browser Fase 3: Shadow PIN, radar opt-in, dan Path Moments E2EE (3 pengguna).
+// Uji browser Fase 3: PIN Bayang (Shadow PIN), Radar Arwah opt-in, dan Jejak (Moments) E2EE (3 pengguna).
 // Jalankan: pnpm build && pnpm test:browser
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -24,7 +24,7 @@ async function signup(page: Page, alias: string) {
   await page.locator("#pass2").fill(PASS);
   await page.getByRole("button", { name: "Buat akun" }).click();
   await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "Lanjut ke PINPath" }).click();
+  await page.getByRole("button", { name: "Lanjut ke KAMBE" }).click();
   await page.getByText("Simpan frasa kunci perangkat").waitFor();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
@@ -36,7 +36,8 @@ async function main() {
   mkdirSync(OUT, { recursive: true });
   const dataDir = mkdtempSync(join(tmpdir(), "pinpath-disc-"));
   const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), PINPATH_DB: join(dataDir, "d.db") },
+    // Mode produksi butuh penyedia xendit; skenario ini tidak membayar, jadi kunci palsu aman (sama seperti e2e.ts).
+    env: { ...process.env, NODE_ENV: "production", PINPATH_PAYMENT_PROVIDER: "xendit", XENDIT_SECRET_KEY: "xnd_development_verify_only", XENDIT_CALLBACK_TOKEN: "verify-only", PINPATH_PUBLIC_URL: BASE, PORT: String(PORT), PINPATH_DB: join(dataDir, "d.db") },
     stdio: ["ignore", "inherit", "inherit"],
   });
   let browser: Browser | null = null;
@@ -62,75 +63,75 @@ async function main() {
     await signup(bima, "Bima_Kopi");
     await signup(citra, "Citra_Desain");
 
-    // --- Shadow PIN: bima terhubung tanpa pernah tahu PIN utama ayu ---
-    await ayu.getByRole("button", { name: /Shadow PIN sementara/ }).click();
-    await ayu.getByLabel("Label Shadow PIN").fill("Grup FB Rotan");
+    // --- PIN Bayang: bima terhubung tanpa pernah tahu PIN utama ayu ---
+    await ayu.getByRole("button", { name: /PIN Bayang 24 jam/ }).click();
+    await ayu.getByLabel("Label PIN Bayang").fill("Grup FB Rotan");
     await ayu.getByRole("button", { name: "Buat" }).click();
-    const shadowBtn = ayu.getByRole("button", { name: /^Salin Shadow PIN/ });
+    const shadowBtn = ayu.getByRole("button", { name: /^Salin PIN Bayang/ });
     await shadowBtn.waitFor();
     const shadow = ((await shadowBtn.textContent()) ?? "").trim();
-    check(/^[2-9A-HJ-NP-Z]{6}$/.test(shadow) && shadow !== ayuPin, `Shadow PIN ${shadow} dibuat (berbeda dari PIN utama)`);
+    check(/^[2-9A-HJ-NP-Z]{6}$/.test(shadow) && shadow !== ayuPin, `PIN Bayang ${shadow} dibuat (berbeda dari PIN utama)`);
     await ayu.screenshot({ path: join(OUT, "d1-shadow-modal.png") });
     await ayu.keyboard.press("Escape");
 
     await bima.getByLabel("PIN tujuan").fill(shadow);
     await bima.getByRole("button", { name: "Undang" }).click();
-    await ayu.getByText(new RegExp(`Lewat Shadow PIN ${shadow} \\(Grup FB Rotan\\)`)).waitFor();
-    check(true, "ayu melihat undangan datang lewat Shadow PIN beserta labelnya");
+    await ayu.getByText(new RegExp(`Lewat PIN Bayang ${shadow} \\(Grup FB Rotan\\)`)).waitFor();
+    check(true, "ayu melihat undangan datang lewat PIN Bayang beserta labelnya");
     await ayu.getByRole("button", { name: "Terima" }).click();
     await bima.getByRole("button", { name: /Ayu_Rotan/ }).waitFor();
     check(!(await bima.content()).includes(ayuPin), "PIN utama ayu TIDAK pernah muncul di layar bima");
 
-    // --- Radar: hanya peserta yang saling melihat, memakai PIN radar ---
-    await ayu.getByRole("button", { name: /Radar ekonomi/ }).click();
+    // --- Radar Arwah: hanya peserta yang saling melihat, memakai PIN radar ---
+    await ayu.getByRole("button", { name: /^Radar Arwah/ }).click();
     await ayu.getByLabel("Kebutuhan atau tawaran").fill("Jual rotan mentah Katingan 2 ton");
-    await ayu.getByRole("button", { name: "Ikut radar 7 hari" }).click();
+    await ayu.getByRole("button", { name: "Ikut Radar Arwah 7 hari" }).click();
     await ayu.getByText(/PIN radar/).waitFor();
     check(true, "ayu ikut radar (opt-in) dan mendapat PIN radar");
 
-    await citra.getByRole("button", { name: /Radar ekonomi/ }).click();
-    await citra.getByText(/Hanya sesama peserta radar/).waitFor();
+    await citra.getByRole("button", { name: /^Radar Arwah/ }).click();
+    await citra.getByText(/Hanya sesama peserta Radar Arwah/).waitFor();
     check(true, "radar menjelaskan aturan privasi sebelum ikut");
     await citra.getByLabel("Sektor radar").selectOption("Desain & Kreatif");
     await citra.getByLabel("Kebutuhan atau tawaran").fill("Jasa desain label kemasan produk");
-    await citra.getByRole("button", { name: "Ikut radar 7 hari" }).click();
+    await citra.getByRole("button", { name: "Ikut Radar Arwah 7 hari" }).click();
     const entry = citra.locator(".stack", { hasText: "Jual rotan mentah Katingan 2 ton" }).last();
     await entry.waitFor();
     check(!(await citra.content()).includes(ayuPin), "radar citra tidak menampilkan PIN utama ayu");
     await citra.screenshot({ path: join(OUT, "d2-radar.png") });
     await entry.getByRole("button", { name: "Undang" }).click();
-    await ayu.getByText(/Lewat radar/).waitFor();
+    await ayu.getByText(/Lewat Radar Arwah/).waitFor();
     check(true, "undangan dari radar ditandai 'lewat radar' untuk ayu");
     await ayu.getByRole("button", { name: "Terima" }).click();
     await citra.getByRole("button", { name: /Ayu_Rotan/ }).waitFor();
 
-    // --- Moments: dienkripsi per kontak, reaksi real-time ---
-    await ayu.getByRole("button", { name: "Moments" }).click();
+    // --- Jejak: dienkripsi per kontak, reaksi real-time ---
+    await ayu.getByRole("button", { name: "Jejak" }).click();
     await ayu.getByRole("radio", { name: /Tempat/ }).click();
-    await ayu.getByLabel("Isi momen").fill("Di gudang Sampit, stok rotan baru datang");
-    check(await ayu.getByText("Dikirim ke 2 kontak, dienkripsi satu per satu.").isVisible(), "penulis tahu momen dikirim ke 2 kontak");
+    await ayu.getByLabel("Isi jejak").fill("Di gudang Sampit, stok rotan baru datang");
+    check(await ayu.getByText("Dikirim ke 2 kontak, dienkripsi satu per satu.").isVisible(), "penulis tahu jejak dikirim ke 2 kontak");
     await ayu.getByRole("button", { name: "Bagikan" }).click();
     await ayu.locator(".moment", { hasText: "Di gudang Sampit" }).waitFor();
 
-    await bima.getByRole("button", { name: "Moments" }).click();
+    await bima.getByRole("button", { name: "Jejak" }).click();
     const bimaMoment = bima.locator(".moment", { hasText: "Di gudang Sampit" });
     await bimaMoment.waitFor();
-    check(true, "bima membaca momen ayu (didekripsi di perangkatnya)");
+    check(true, "bima membaca jejak ayu (didekripsi di perangkatnya)");
     const api = await bima.evaluate(async () => JSON.stringify(await (await fetch("/api/moments")).json()));
-    check(!api.includes("Sampit"), "respons server untuk momen hanya berisi ciphertext");
+    check(!api.includes("Sampit"), "respons server untuk jejak hanya berisi ciphertext");
     await bimaMoment.getByRole("button", { name: /Reaksi ❤️/ }).click();
     await ayu.locator(".moment", { hasText: "Di gudang Sampit" }).getByRole("button", { name: "Reaksi ❤️ (1)" }).waitFor();
-    check(true, "reaksi ❤️ bima muncul real-time di momen ayu");
+    check(true, "reaksi ❤️ bima muncul real-time di jejak ayu");
     const ov = await bima.evaluate(() => ({ sw: document.documentElement.scrollWidth, vw: document.documentElement.clientWidth }));
-    check(ov.sw <= ov.vw, `linimasa Moments muat di layar HP (${ov.sw}/${ov.vw})`);
+    check(ov.sw <= ov.vw, `linimasa Jejak muat di layar HP (${ov.sw}/${ov.vw})`);
     await bima.screenshot({ path: join(OUT, "d3-bima-moments-mobile.png") });
     await ayu.screenshot({ path: join(OUT, "d4-ayu-moments.png") });
 
-    // Kembali ke chat dari Moments di HP.
+    // Kembali ke chat dari Jejak di HP.
     await bima.getByRole("button", { name: "Kembali" }).click();
     await bima.getByRole("button", { name: /Ayu_Rotan/ }).click();
     await bima.locator(".chat-head").waitFor();
-    check(true, "navigasi Moments ⇄ chat di HP berjalan");
+    check(true, "navigasi Jejak ⇄ chat di HP berjalan");
   } catch (e) {
     failures++;
     console.error("✖ skenario terhenti:", e);

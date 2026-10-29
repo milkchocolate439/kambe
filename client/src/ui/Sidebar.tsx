@@ -4,11 +4,12 @@ import { NOTE_MAX, type LabelContent, type NoteContent, type PmContent } from ".
 import { ApiError } from "../lib/api.ts";
 import { Avatar, copyText, Modal, SealedText, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+import { Logo, Wordmark } from "./Logo.tsx";
 import { RadarCard, ShadowPinModal } from "./Discovery.tsx";
 
 export function Sidebar() {
   return (
-    <aside className="sidebar" aria-label="Kontak dan PIN">
+    <aside className="sidebar" aria-label="Kontak dan PIN Kambe">
       <MyPinCard />
       <InviteCard />
       <RadarCard />
@@ -25,12 +26,12 @@ function MyPinCard() {
   const [busy, setBusy] = useState(false);
 
   async function copy() {
-    if (await copyText(s.me.pin)) m.toast(`PIN ${s.me.pin} disalin. Bagikan tanpa perlu memberi nomor HP.`, "ok");
+    if (await copyText(s.me.pin)) m.toast(`PIN Kambe ${s.me.pin} disalin. Bagikan tanpa perlu memberi nomor HP.`, "ok");
   }
 
   async function share() {
     try {
-      await navigator.share({ title: "PIN PINPath saya", text: `Tambahkan saya di PINPath dengan PIN: ${s.me.pin}` });
+      await navigator.share({ title: "PIN Kambe saya", text: `Tambahkan saya di KAMBE dengan PIN Kambe: ${s.me.pin}` });
     } catch {
       /* pengguna membatalkan */
     }
@@ -40,7 +41,7 @@ function MyPinCard() {
     setBusy(true);
     try {
       const pin = await m.rotatePin();
-      m.toast(`PIN baru: ${pin}. PIN lama tidak berlaku lagi.`, "ok");
+      m.toast(`PIN Kambe baru: ${pin}. PIN lama tidak berlaku lagi.`, "ok");
       setConfirmRotate(false);
     } catch (e) {
       m.toast(e instanceof ApiError ? e.message : "Gagal mengganti PIN", "danger");
@@ -61,32 +62,32 @@ function MyPinCard() {
         </div>
       </div>
       <div className="hero-mark compact">
-        <Icon name="mask" size={34} strokeWidth={1.6} />
-        <div className="hero-name">PINPath</div>
-        <div className="hero-title">Mulai Obrolan Rahasia</div>
+        <Logo size={28} />
+        <Wordmark className="hero-name" />
+        <div className="hero-title">Hadir tanpa jejak.</div>
       </div>
       <div className="id-card">
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="small">PIN untuk dibagikan:</span>
+          <span className="small">PIN Kambe untuk dibagikan:</span>
           <div className="row" style={{ gap: 6 }}>
             {"share" in navigator && (
-              <button className="btn ghost icon round" onClick={share} aria-label="Bagikan PIN" title="Bagikan PIN">
+              <button className="btn ghost icon round" onClick={share} aria-label="Bagikan PIN Kambe" title="Bagikan PIN Kambe">
                 <Icon name="share" />
               </button>
             )}
-            <button className="btn soft small" onClick={copy} aria-label="Salin PIN" title="Salin PIN">
+            <button className="btn soft small" onClick={copy} aria-label="Salin PIN Kambe" title="Salin PIN Kambe">
               <Icon name="copy" size={15} /> Salin
             </button>
           </div>
         </div>
-        <button className="pin-big" onClick={copy} aria-label={`Salin PIN ${s.me.pin}`}>
+        <button className="pin-big" onClick={copy} aria-label={`Salin PIN Kambe ${s.me.pin}`}>
           {s.me.pin}
         </button>
       </div>
       <div className="hint">PIN hanya untuk berbagi kontak — bukan kata sandi. Orang lain harus kamu setujui dulu.</div>
       <div className="row" style={{ marginTop: 10 }}>
         <button className="btn small grow" onClick={() => setShadow(true)}>
-          <Icon name="clock" size={15} /> Shadow PIN 24 jam
+          <Icon name="clock" size={15} /> PIN Bayang 24 jam
         </button>
         <button className="btn small" onClick={() => setConfirmRotate(true)} aria-label="Ganti PIN" title="Ganti PIN (kalau kena spam)">
           <Icon name="refresh" size={15} /> Ganti
@@ -95,10 +96,10 @@ function MyPinCard() {
       {shadow && <ShadowPinModal onClose={() => setShadow(false)} />}
 
       {confirmRotate && (
-        <Modal title="Ganti PIN?" onClose={() => setConfirmRotate(false)}>
+        <Modal title="Ganti PIN Kambe?" onClose={() => setConfirmRotate(false)}>
           <div className="stack">
             <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>
-              PIN lama langsung tidak berlaku, dan semua undangan yang belum kamu terima ikut terhapus. Kontak yang sudah terhubung <strong>tidak</strong> terputus. Berguna kalau PIN-mu tersebar dan kamu kena spam.
+              PIN lama langsung tidak berlaku, dan semua undangan yang belum kamu terima ikut terhapus. Kontak yang sudah terhubung <strong>tidak</strong> terputus. Berguna kalau PIN Kambe-mu tersebar dan kamu kena spam.
             </p>
             <div className="row">
               <button className="btn grow" onClick={() => setConfirmRotate(false)}>Batal</button>
@@ -172,7 +173,7 @@ function InviteCard() {
           aria-label="Catatan undangan"
         />
         <span className="hint center">
-          Mulai obrolan baru dengan memasukkan PIN seseorang, atau <span className="accent">bagikan PIN-mu</span> kepadanya.
+          Mulai obrolan baru dengan memasukkan PIN seseorang, atau <span className="accent">bagikan PIN Kambe-mu</span> kepadanya.
         </span>
         {error && <span className="error" role="alert">{error}</span>}
         <button className="btn primary block pill" disabled={busy || !normalized}>
@@ -224,7 +225,7 @@ function Requests() {
                 </div>
                 {r.via && (
                   <div className="tiny" style={{ color: "var(--amber)" }}>
-                    <Icon name={r.via.kind === "radar" ? "store" : "clock"} size={12} /> Lewat {r.via.kind === "radar" ? "radar" : r.via.kind === "once" ? "PIN sekali pakai" : "Shadow PIN"} {r.via.pin}
+                    <Icon name={r.via.kind === "radar" ? "store" : "clock"} size={12} /> Lewat {r.via.kind === "radar" ? "Radar Arwah" : r.via.kind === "once" ? "PIN sekali pakai" : "PIN Bayang"} {r.via.pin}
                     {r.via.label && (
                       <>
                         {" ("}
@@ -291,7 +292,7 @@ function Contacts() {
           <div className="icon-wrap">
             <Icon name="userPlus" size={26} />
           </div>
-          <div className="small">Belum ada kontak. Bagikan PIN-mu atau undang PIN orang lain.</div>
+          <div className="small">Belum ada kontak. Bagikan PIN Kambe-mu atau undang PIN orang lain.</div>
         </div>
       ) : (
         <div className="list">
@@ -307,7 +308,7 @@ function Contacts() {
                     {alert ? (
                       <Icon name="alert" size={14} style={{ color: "var(--warn)" }} aria-label="Safety number berubah" />
                     ) : pin?.verified ? (
-                      <Icon name="shieldCheck" size={14} style={{ color: "var(--ok)" }} aria-label="Terverifikasi" />
+                      <Icon name="shieldCheck" size={14} className="verified" aria-label="Terverifikasi" />
                     ) : null}
                   </div>
                   <div className="tiny muted truncate">

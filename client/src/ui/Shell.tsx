@@ -7,6 +7,7 @@ import { Settings } from "./Settings.tsx";
 import { StoreModal } from "./Commerce.tsx";
 import { ModModal } from "./Disputes.tsx";
 import { Icon } from "./icons.tsx";
+import { Logo } from "./Logo.tsx";
 
 export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }) {
   const [s, m] = useMessenger();
@@ -16,7 +17,7 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
   const [reclaiming, setReclaiming] = useState(false);
   const [moments, setMoments] = useState(false);
   const unreadTotal = s.contacts.reduce((n, c) => n + c.unread, 0) + s.incoming.length;
-  // Membuka obrolan dari daftar kontak otomatis keluar dari tampilan Moments.
+  // Membuka obrolan dari daftar kontak otomatis keluar dari tampilan Jejak.
   useEffect(() => {
     if (s.activePeer) setMoments(false);
   }, [s.activePeer]);
@@ -24,15 +25,13 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
   return (
     <div className="app">
       <header className="topbar">
-        <div className="logo" aria-hidden="true">
-          <Icon name="mask" />
-        </div>
-        <span className="brand hide-mobile">PINPath</span>
+        <Logo size={28} />
+        <span className="brand hide-mobile">KAMBE</span>
         <button
           className="badge pin"
           style={{ fontSize: 13, padding: "4px 10px", cursor: "pointer" }}
-          onClick={async () => (await copyText(s.me.pin)) && m.toast(`PIN ${s.me.pin} disalin`, "ok")}
-          title="Salin PIN kamu"
+          onClick={async () => (await copyText(s.me.pin)) && m.toast(`PIN Kambe ${s.me.pin} disalin`, "ok")}
+          title="Salin PIN Kambe kamu"
         >
           <Icon name="key" size={13} /> {s.me.pin}
         </button>
@@ -51,9 +50,9 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
             void m.openThread(null);
             setMoments(!moments);
           }}
-          aria-label="Moments"
+          aria-label="Jejak"
           aria-pressed={moments}
-          title="Path Moments"
+          title="Jejak"
         >
           <Icon name="planet" />
         </button>

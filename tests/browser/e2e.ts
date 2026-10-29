@@ -50,7 +50,7 @@ async function signup(page: Page, alias: string) {
   await page.getByText("Simpan kode pemulihan").waitFor();
   const code = await page.getByLabel("Kode pemulihan").textContent();
   await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "Lanjut ke PINPath" }).click();
+  await page.getByRole("button", { name: "Lanjut ke KAMBE" }).click();
   await page.getByText("Simpan frasa kunci perangkat").waitFor();
   const seed = await page.getByLabel("Frasa kunci perangkat").textContent();
   await page.getByRole("checkbox").check();

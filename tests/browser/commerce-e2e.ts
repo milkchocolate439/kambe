@@ -28,7 +28,7 @@ async function signup(page: Page, alias: string) {
   await page.locator("#pass2").fill(PASS);
   await page.getByRole("button", { name: "Buat akun" }).click();
   await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "Lanjut ke PINPath" }).click();
+  await page.getByRole("button", { name: "Lanjut ke KAMBE" }).click();
   await page.getByText("Simpan frasa kunci perangkat").waitFor();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
@@ -233,7 +233,7 @@ async function main() {
 
     // Pembeli (non-PRO) menekan jabat tangan → diarahkan ke PRO, bukan error.
     await buyer.getByRole("button", { name: "Tawarkan kesepakatan rekber" }).click();
-    await buyer.getByText("PINPath PRO").waitFor();
+    await buyer.getByText("KAMBE PRO").waitFor();
     check(true, "pengguna non-PRO diarahkan ke penjelasan PRO");
     await buyer.keyboard.press("Escape");
 

@@ -18,7 +18,7 @@ const SIGNED_OUT_NOTICE: Record<string, string> = {
   locked: "Brankas enkripsi di perangkat ini terkunci. Masuk lagi untuk membukanya.",
 };
 
-const STORAGE_BLOCKED = "Browser ini tidak mengizinkan penyimpanan kunci enkripsi (mode privat/penyimpanan diblokir). Buka PINPath di browser biasa.";
+const STORAGE_BLOCKED = "Browser ini tidak mengizinkan penyimpanan kunci enkripsi (mode privat/penyimpanan diblokir). Buka KAMBE di browser biasa.";
 
 type Phase =
   | { t: "loading" }
@@ -116,7 +116,7 @@ export function App() {
     return (
       <div className="auth">
         <div className="card auth-card stack">
-          <strong>Tidak bisa membuka PINPath</strong>
+          <strong>Tidak bisa membuka KAMBE</strong>
           <span className="small muted">{phase.message}</span>
           <button className="btn primary" onClick={() => void boot()}>
             Coba lagi

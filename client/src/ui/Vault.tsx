@@ -37,7 +37,7 @@ export function SeedCodeScreen({ code, onDone }: { code: string; onDone: () => v
           <button className="btn grow" type="button" onClick={async () => setCopied(await copyText(code))}>
             <Icon name="copy" /> {copied ? "Tersalin" : "Salin"}
           </button>
-          <button className="btn grow" type="button" onClick={() => downloadText("pinpath-frasa-kunci.txt", `Frasa kunci perangkat PINPath\n\n${code}\n\nSimpan terpisah dari HP. Jangan kirim lewat chat.\n`)}>
+          <button className="btn grow" type="button" onClick={() => downloadText("kambe-frasa-kunci.txt", `Frasa kunci perangkat KAMBE\n\n${code}\n\nSimpan terpisah dari HP. Jangan kirim lewat chat.\n`)}>
             <Icon name="share" /> Unduh .txt
           </button>
         </div>
@@ -64,7 +64,7 @@ const SETUP_TEXT: Record<"new_device" | "passphrase_changed" | "legacy", { title
   },
   legacy: {
     title: "Tingkatkan keamanan perangkat",
-    body: "PINPath sekarang mengunci riwayat di perangkat dengan frasa kunci. Kalau kamu belum pernah punya frasa kunci, pilih “Mulai dengan frasa kunci baru” — riwayat di perangkat ini tetap utuh dan ikut dienkripsi.",
+    body: "KAMBE sekarang mengunci riwayat di perangkat dengan frasa kunci. Kalau kamu belum pernah punya frasa kunci, pilih “Mulai dengan frasa kunci baru” — riwayat di perangkat ini tetap utuh dan ikut dienkripsi.",
   },
 };
 
@@ -194,7 +194,7 @@ export function VaultPanel() {
     const blob = await m.exportBackup();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `pinpath-cadangan-${s.me.alias}-${new Date().toISOString().slice(0, 10)}.pinpath`;
+    a.download = `kambe-cadangan-${s.me.alias}-${new Date().toISOString().slice(0, 10)}.kambe`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     m.toast("Cadangan terenkripsi diunduh. Hanya bisa dibuka dengan frasa kuncimu.", "ok");
@@ -249,7 +249,7 @@ export function VaultPanel() {
       <input
         ref={fileRef}
         type="file"
-        accept=".pinpath,application/json"
+        accept=".kambe,.pinpath,application/json"
         aria-label="File cadangan"
         style={{ display: "none" }}
         onChange={(e) => {

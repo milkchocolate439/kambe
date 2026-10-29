@@ -4,6 +4,7 @@ import { api, ApiError } from "../lib/api.ts";
 import { keystore } from "../lib/keystore.ts";
 import { Modal, Switch, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+import { Logo } from "./Logo.tsx";
 import { VaultPanel } from "./Vault.tsx";
 
 type Run = (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
@@ -75,7 +76,7 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
 
         <div className="row">
           <div className="grow">
-            <label htmlFor="pin-rotate" style={{ fontWeight: 600 }}>Ganti PIN utama otomatis</label>
+            <label htmlFor="pin-rotate" style={{ fontWeight: 600 }}>Ganti PIN Kambe otomatis</label>
             <div className="hint">PIN lama berhenti berlaku; kontak yang sudah terhubung tidak terputus.</div>
           </div>
           <select
@@ -83,7 +84,7 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
             className="input"
             style={{ width: "auto" }}
             value={s.me.pinRotateDays}
-            onChange={(e) => void run(() => m.updateSettings({ pinRotateDays: Number(e.target.value) }), "Pengaturan rotasi PIN disimpan")}
+            onChange={(e) => void run(() => m.updateSettings({ pinRotateDays: Number(e.target.value) }), "Pengaturan rotasi PIN Kambe disimpan")}
           >
             <option value={0}>Mati</option>
             <option value={1}>Setiap hari</option>
@@ -144,7 +145,7 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
         {danger === "delete" && (
           <div className="stack card" style={{ borderColor: "var(--danger)" }}>
             <strong>Hapus akun {s.me.alias}?</strong>
-            <span className="small" style={{ color: "var(--text-2)" }}>Semua kontak, pesan terenkripsi, dan PIN-mu dihapus dari server, beserta kunci di perangkat ini. Tidak bisa dibatalkan.</span>
+            <span className="small" style={{ color: "var(--text-2)" }}>Semua kontak, pesan terenkripsi, dan PIN Kambe-mu dihapus dari server, beserta kunci di perangkat ini. Tidak bisa dibatalkan.</span>
             <input className="input" type="password" autoComplete="current-password" placeholder="Ketik passphrase untuk konfirmasi" value={pass} onChange={(e) => setPass(e.target.value)} />
             <div className="row">
               <button className="btn grow" onClick={() => setDanger(null)}>Batal</button>
@@ -167,8 +168,21 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
 
         {error && <div className="error" role="alert">{error}</div>}
 
+        <div className="divider" />
+
+        <section className="stack" aria-labelledby="tentang-kambe" style={{ gap: 8 }}>
+          <div className="row" style={{ gap: 10 }}>
+            <Logo size={28} />
+            <div id="tentang-kambe" style={{ fontWeight: 600 }}>Tentang KAMBE</div>
+          </div>
+          <div className="small muted">Hadir tanpa jejak.</div>
+          <p className="small" style={{ margin: 0, color: "var(--text-2)", lineHeight: 1.5 }}>
+            Seperti kambe, kamu hadir tanpa nomor HP atau email. Pesanmu hanya singgah sebentar di server, lalu hilang. Hanya yang kamu izinkan yang bisa melihatmu.
+          </p>
+        </section>
+
         <div className="hint" style={{ lineHeight: 1.5 }}>
-          <Icon name="shield" size={12} /> PINPath v0.1 · Enkripsi X25519 + AES-256-GCM di perangkat. Server hanya menyimpan ciphertext, alias, PIN, dan waktu kirim — tanpa nomor HP, email, atau identitas asli.
+          <Icon name="shield" size={12} /> KAMBE v0.1 · Enkripsi X25519 + AES-256-GCM di perangkat. Server hanya menyimpan ciphertext, alias, PIN, dan waktu kirim — tanpa nomor HP, email, atau identitas asli.
         </div>
       </div>
     </Modal>

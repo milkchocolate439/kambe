@@ -78,7 +78,7 @@ export function Chat() {
           </div>
           <h2 style={{ margin: "0 0 6px", fontSize: 18, color: "var(--text)" }}>Pilih obrolan</h2>
           <div className="small" style={{ maxWidth: 360 }}>
-            Setiap pesan dikunci di perangkatmu dengan enkripsi end-to-end. Server PINPath hanya meneruskan data acak yang tidak bisa dibaca siapa pun.
+            Setiap pesan dikunci di perangkatmu dengan enkripsi end-to-end. Server KAMBE hanya meneruskan data acak yang tidak bisa dibaca siapa pun.
           </div>
         </div>
       </div>
@@ -157,7 +157,7 @@ export function Chat() {
             <strong className="truncate">{contact.alias}</strong>
             <span className="badge pin hide-mobile">{contact.pin}</span>
           </div>
-          <button className="verify-link" style={{ color: keyAlert ? "var(--warn)" : pin?.verified ? "var(--ok)" : "var(--muted)" }} onClick={() => setSafety(true)}>
+          <button className={`verify-link${!keyAlert && pin?.verified ? " verified" : ""}`} style={{ color: keyAlert ? "var(--warn)" : pin?.verified ? "var(--arwah)" : "var(--muted)" }} onClick={() => setSafety(true)}>
             <Icon name={keyAlert ? "alert" : pin?.verified ? "shieldCheck" : "lock"} size={13} style={{ flexShrink: 0 }} />
             <span>{keyAlert ? "Safety number berubah — tinjau" : pin?.verified ? "Terenkripsi · terverifikasi" : "Terenkripsi · ketuk untuk verifikasi"}</span>
           </button>

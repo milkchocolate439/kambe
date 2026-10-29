@@ -91,7 +91,7 @@ const ACTIONS: Record<DealAction, { label: string; primary?: boolean; danger?: b
     label: "Bayar ke rekber",
     primary: true,
     confirm: (d) =>
-      `${rupiah(d.price)} akan DITAHAN rekber PINPath. Penjual wajib mengirim dalam 3 hari — kalau tidak, kamu bisa menarik dana kembali (otomatis kembali setelah 7 hari). Penjual baru menerima dana setelah kamu konfirmasi barang diterima, atau otomatis 7 hari setelah dikirim bila kamu tidak menanggapi. Jangan pernah transfer di luar fitur ini.`,
+      `${rupiah(d.price)} akan DITAHAN rekber KAMBE. Penjual wajib mengirim dalam 3 hari — kalau tidak, kamu bisa menarik dana kembali (otomatis kembali setelah 7 hari). Penjual baru menerima dana setelah kamu konfirmasi barang diterima, atau otomatis 7 hari setelah dikirim bila kamu tidak menanggapi. Jangan pernah transfer di luar fitur ini.`,
   },
   ship: {
     label: "Tandai sudah dikirim",
@@ -456,7 +456,7 @@ export function IdentityModal({ peer, peerAlias, onClose }: { peer: string; peer
         <div className="banner info" style={{ borderRadius: 12, border: 0 }}>
           <Icon name="lock" />
           <span className="small">
-            Dikirim sebagai pesan <strong>terenkripsi end-to-end</strong> hanya ke {peerAlias}. Server PINPath tidak pernah melihat data ini.
+            Dikirim sebagai pesan <strong>terenkripsi end-to-end</strong> hanya ke {peerAlias}. Server KAMBE tidak pernah melihat data ini.
           </span>
         </div>
         <div className="field">
@@ -550,7 +550,7 @@ function ProTab() {
       <div className="card" style={{ background: "var(--amber-bg)", borderColor: "transparent" }}>
         <div className="row">
           <Icon name="crown" />
-          <strong className="grow">PINPath PRO</strong>
+          <strong className="grow">KAMBE PRO</strong>
           <strong className="mono">{rupiah(pro?.price ?? 49_000)}/bln</strong>
         </div>
         <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18, color: "var(--text-2)" }}>
@@ -712,7 +712,7 @@ function WalletTab() {
           ))}
         </div>
       )}
-      <span className="hint">Penarikan saldo ke rekening baru tersedia setelah PINPath memakai payment gateway berizin.</span>
+      <span className="hint">Penarikan saldo ke rekening baru tersedia setelah KAMBE memakai payment gateway berizin.</span>
     </div>
   );
 }

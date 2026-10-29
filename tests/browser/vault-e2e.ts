@@ -29,7 +29,7 @@ async function signup(page: Page, alias: string) {
   await page.locator("#pass2").fill(PASS);
   await page.getByRole("button", { name: "Buat akun" }).click();
   await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "Lanjut ke PINPath" }).click();
+  await page.getByRole("button", { name: "Lanjut ke KAMBE" }).click();
   await page.getByText("Simpan frasa kunci perangkat").waitFor();
   const seed = (await page.getByLabel("Frasa kunci perangkat").textContent()) ?? "";
   await page.getByRole("checkbox").check();
@@ -68,7 +68,8 @@ async function main() {
   mkdirSync(OUT, { recursive: true });
   const dataDir = mkdtempSync(join(tmpdir(), "pinpath-vault-"));
   const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
-    env: { ...process.env, NODE_ENV: "production", PORT: String(PORT), PINPATH_DB: join(dataDir, "v.db") },
+    // Mode produksi butuh penyedia xendit; skenario ini tidak membayar, jadi kunci palsu aman (sama seperti e2e.ts).
+    env: { ...process.env, NODE_ENV: "production", PINPATH_PAYMENT_PROVIDER: "xendit", XENDIT_SECRET_KEY: "xnd_development_verify_only", XENDIT_CALLBACK_TOKEN: "verify-only", PINPATH_PUBLIC_URL: BASE, PORT: String(PORT), PINPATH_DB: join(dataDir, "v.db") },
     stdio: ["ignore", "inherit", "inherit"],
   });
   let browser: Browser | null = null;
@@ -117,7 +118,8 @@ async function main() {
     // Cadangan terenkripsi.
     await alice.getByRole("button", { name: "Pengaturan" }).click();
     const [dl] = await Promise.all([alice.waitForEvent("download"), alice.getByRole("button", { name: "Unduh cadangan terenkripsi" }).click()]);
-    const backupPath = join(dataDir, "cadangan.pinpath");
+    check(/^kambe-cadangan-Brankas_Ayu-\d{4}-\d{2}-\d{2}\.kambe$/.test(dl.suggestedFilename()), `nama file cadangan bermerek KAMBE (${dl.suggestedFilename()})`);
+    const backupPath = join(dataDir, "cadangan.kambe");
     await dl.saveAs(backupPath);
     const backupText = readFileSync(backupPath, "utf8");
     check(/"format":"pinpath-backup"/.test(backupText) && !backupText.includes("MERAPI") && !backupText.includes("Brankas_Bima"), "file cadangan hanya berisi ciphertext");
@@ -169,6 +171,14 @@ async function main() {
     await alice2.getByRole("button", { name: /Brankas_Bima/ }).click();
     await alice2.getByText(SECRET_MSG).waitFor();
     check(true, "cadangan terenkripsi dipulihkan di perangkat baru (riwayat lama terbaca)");
+    // Cadangan gaya lama (*.pinpath, sebelum rebrand KAMBE) tetap bisa dipulihkan.
+    // Isinya sama dengan cadangan tadi, jadi pesan sudah ada → "0 pesan baru" (sekaligus membedakan dari toast pertama).
+    await alice2.getByRole("button", { name: "Pengaturan" }).click();
+    check((await alice2.getByLabel("File cadangan").getAttribute("accept"))?.split(",").includes(".pinpath") === true, "input cadangan tetap menerima ekstensi .pinpath");
+    await alice2.getByLabel("File cadangan").setInputFiles({ name: "lama.pinpath", mimeType: "application/octet-stream", buffer: readFileSync(backupPath) });
+    await alice2.getByText(/Cadangan .* dipulihkan: 0 pesan baru/).waitFor();
+    check(!(await alice2.getByText(/bukan file cadangan/).count()), "file cadangan lama.pinpath (nama gaya lama) berhasil dipulihkan");
+    await alice2.keyboard.press("Escape");
     // Bob masih bisa mengirim pesan yang terbaca di perangkat baru (kunci sama).
     await bob.getByLabel("Tulis pesan").fill("Masih aman di HP baru?");
     await bob.getByRole("button", { name: "Kirim" }).click();

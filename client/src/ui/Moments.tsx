@@ -1,4 +1,4 @@
-// Fase 3 — Path Moments: linimasa intim untuk kontak, terenkripsi end-to-end per penerima.
+// Fase 3 — Jejak (dulu Path Moments): linimasa intim untuk kontak, terenkripsi end-to-end per penerima.
 import { useEffect, useState } from "react";
 import type { MomentType } from "../../../shared/e2ee.ts";
 import { MOMENT_TEXT_MAX, type Reaction } from "../../../shared/protocol.ts";
@@ -6,6 +6,7 @@ import { ApiError } from "../lib/api.ts";
 import type { MomentView } from "../lib/messenger.ts";
 import { Avatar, dayOf, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
+import { Logo } from "./Logo.tsx";
 
 const TYPES: Record<MomentType, { emoji: string; label: string; placeholder: string; color: string }> = {
   thought: { emoji: "💭", label: "Pikiran", placeholder: "Apa yang sedang kamu pikirkan?", color: "#6366f1" },
@@ -26,7 +27,7 @@ export function MomentsView({ onBack }: { onBack: () => void }) {
   const textRequired = type !== "awake" && type !== "sleep";
 
   useEffect(() => {
-    void m.loadMoments().catch((e) => setError(e instanceof ApiError ? e.message : "Gagal memuat momen"));
+    void m.loadMoments().catch((e) => setError(e instanceof ApiError ? e.message : "Gagal memuat jejak"));
   }, [m]);
 
   async function share() {
@@ -36,9 +37,9 @@ export function MomentsView({ onBack }: { onBack: () => void }) {
       const body = text.trim() || (type === "awake" ? "Selamat pagi!" : type === "sleep" ? "Selamat malam!" : "");
       const n = await m.postMoment(type, body);
       setText("");
-      m.toast(n ? `Momen dibagikan terenkripsi ke ${n} kontak` : "Momen disimpan (belum ada kontak yang menerima)", "ok");
+      m.toast(n ? `Jejak dibagikan terenkripsi ke ${n} kontak` : "Jejak disimpan (belum ada kontak yang menerima)", "ok");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Gagal membagikan momen");
+      setError(e instanceof ApiError ? e.message : "Gagal membagikan jejak");
     } finally {
       setBusy(false);
     }
@@ -50,25 +51,23 @@ export function MomentsView({ onBack }: { onBack: () => void }) {
         <button className="btn ghost icon only-mobile" onClick={onBack} aria-label="Kembali">
           <Icon name="back" />
         </button>
-        <div className="logo" aria-hidden="true" style={{ width: 38, height: 38 }}>
-          <Icon name="planet" />
-        </div>
+        <Logo size={38} />
         <div className="grow">
-          <strong>Moments</strong>
+          <strong>Jejak</strong>
           <div className="tiny muted">Hanya untuk kontakmu · terenkripsi per kontak · hilang setelah 30 hari</div>
         </div>
       </header>
 
       <div className="messages" style={{ gap: 14 }}>
         <section className="card stack" style={{ gap: 10 }}>
-          <div className="row" style={{ flexWrap: "wrap", gap: 6 }} role="radiogroup" aria-label="Jenis momen">
+          <div className="row" style={{ flexWrap: "wrap", gap: 6 }} role="radiogroup" aria-label="Jenis jejak">
             {(Object.keys(TYPES) as MomentType[]).map((t) => (
               <button key={t} role="radio" aria-checked={type === t} className={`btn small ${type === t ? "primary" : ""}`} onClick={() => setType(t)}>
                 {TYPES[t].emoji} {TYPES[t].label}
               </button>
             ))}
           </div>
-          <textarea className="textarea" rows={2} maxLength={MOMENT_TEXT_MAX} value={text} onChange={(e) => setText(e.target.value)} placeholder={TYPES[type].placeholder} aria-label="Isi momen" />
+          <textarea className="textarea" rows={2} maxLength={MOMENT_TEXT_MAX} value={text} onChange={(e) => setText(e.target.value)} placeholder={TYPES[type].placeholder} aria-label="Isi jejak" />
           <div className="row">
             <span className="tiny muted grow">
               <Icon name="lock" size={12} /> Dikirim ke {recipients} kontak, dienkripsi satu per satu.
@@ -87,7 +86,7 @@ export function MomentsView({ onBack }: { onBack: () => void }) {
             <div className="icon-wrap">
               <Icon name="planet" size={26} />
             </div>
-            <div className="small">Belum ada momen. Bagikan yang pertama — hanya kontakmu yang bisa melihatnya.</div>
+            <div className="small">Belum ada jejak. Tinggalkan yang pertama — hanya kontakmu yang bisa melihatnya.</div>
           </div>
         ) : (
           <div className="timeline">
@@ -129,7 +128,7 @@ function MomentItem({ mo }: { mo: MomentView }) {
         </p>
       ) : (
         <p className="small muted" style={{ margin: "8px 0 0", fontStyle: "italic" }}>
-          {mo.state === "locked" ? "Dienkripsi untuk perangkat lain — tidak bisa dibuka di sini." : "Momen ini rusak atau diubah di jalan."}
+          {mo.state === "locked" ? "Dienkripsi untuk perangkat lain — tidak bisa dibuka di sini." : "Jejak ini rusak atau diubah di jalan."}
         </p>
       )}
       {mo.untrusted && (
@@ -153,7 +152,7 @@ function MomentItem({ mo }: { mo: MomentView }) {
         ))}
         <span className="grow" />
         {mo.mine && (
-          <button className="btn ghost icon" style={{ width: 32, minHeight: 32 }} aria-label="Hapus momen" onClick={() => void m.deleteMoment(mo.id).then(() => m.toast("Momen dihapus", "ok"))}>
+          <button className="btn ghost icon" style={{ width: 32, minHeight: 32 }} aria-label="Hapus jejak" onClick={() => void m.deleteMoment(mo.id).then(() => m.toast("Jejak dihapus", "ok"))}>
             <Icon name="trash" size={15} />
           </button>
         )}
