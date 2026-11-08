@@ -32,6 +32,4 @@ services:
         value: langsung
       - key: KAMBE_FREE_PLATFORM
         value: "1"
-      # Diisi setelah akun moderator dibuat (ID akun, bukan alias).
-      - key: KAMBE_MODERATORS
-        sync: false
+      # KAMBE_MODERATORS (ID akun moderator) disetel di dasbor setelah akunnya dibuat.
