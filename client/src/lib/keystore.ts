@@ -28,7 +28,7 @@ export interface LocalMessage {
   peer: string;
   id: string;
   mine: boolean;
-  kind: "text" | "ping" | "identity" | "locked" | "broken";
+  kind: "text" | "ping" | "identity" | "payinfo" | "locked" | "broken";
   text: string;
   createdAt: number;
   status: "pending" | "S" | "D" | "R" | "failed" | "X";

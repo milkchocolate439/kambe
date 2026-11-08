@@ -1,5 +1,6 @@
 // Fase 3 — Jejak (dulu Path Moments): linimasa intim untuk kontak, terenkripsi end-to-end per penerima.
 import { useEffect, useState } from "react";
+import { maskContacts } from "../../../shared/contactguard.ts";
 import type { MomentType } from "../../../shared/e2ee.ts";
 import { MOMENT_TEXT_MAX, type Reaction } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
@@ -124,7 +125,7 @@ function MomentItem({ mo }: { mo: MomentView }) {
       {mo.state === "ok" ? (
         <p style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
           <span className="tiny muted" style={{ fontWeight: 700 }}>{t.label.toUpperCase()} · </span>
-          {mo.text}
+          {mo.mine ? mo.text : maskContacts(mo.text).text}
         </p>
       ) : (
         <p className="small muted" style={{ margin: "8px 0 0", fontStyle: "italic" }}>

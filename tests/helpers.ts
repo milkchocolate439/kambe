@@ -2,6 +2,7 @@ import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import { createApp } from "../server/app.ts";
 import type { DealTimers } from "../server/commerce.ts";
+import type { PaymentProvider } from "../server/payments.ts";
 import type { ServerEvent } from "../shared/protocol.ts";
 import { generateIdentity, type Identity } from "../shared/e2ee.ts";
 import { openSealed, seal, type Recipient, type SealedBlob, type SealedKind, type SealedView } from "../shared/sealed.ts";
@@ -49,7 +50,7 @@ export async function resolveDispute(mod: Client, dealId: string, decision: stri
 
 export const TEST_PASSPHRASE = "kunci-uji-yang-panjang-sekali";
 
-export async function startApp(opts: { dealTimers?: Partial<DealTimers>; feePerMille?: number } = {}) {
+export async function startApp(opts: { dealTimers?: Partial<DealTimers>; feePerMille?: number; payments?: PaymentProvider; freePlatform?: boolean } = {}) {
   const app = createApp({ dbPath: ":memory:", ...opts });
   await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", () => r()));
   const port = (app.server.address() as AddressInfo).port;

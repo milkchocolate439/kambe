@@ -153,31 +153,35 @@ export function ShipmentInfo({ deal }: { deal: Deal }) {
 // -------------------------------------------------------------- sengketa ---
 
 export function DisputeModal({ deal, peer, onClose }: { deal: Deal; peer: string; onClose: () => void }) {
-  const [, m] = useMessenger();
-  const [reason, setReason] = useState<DisputeReason>("not_received");
+  const [s, m] = useMessenger();
+  const iAmSeller = deal.sellerId === s.me.id;
+  const reasons = (Object.keys(DISPUTE_REASONS) as DisputeReason[]).filter((k) => (iAmSeller ? k === "payment_missing" || k === "other" : k !== "payment_missing"));
+  const [reason, setReason] = useState<DisputeReason>(iAmSeller ? "payment_missing" : "not_received");
   const [text, setText] = useState("");
   const { busy, error, run } = useBusy();
 
   async function submit() {
     const content: StatementContent = { reason, text: cleanDisplayText(text, STATEMENT_MAX) };
     if (await run(() => m.dealAction(peer, deal.id, "dispute", content))) {
-      m.toast("Sengketa diajukan. Dana tetap ditahan sampai ada penyelesaian.", "ok");
+      m.toast(deal.direct ? "Sengketa diajukan. Moderator akan menilai bukti kedua pihak." : "Sengketa diajukan. Dana tetap ditahan sampai ada penyelesaian.", "ok");
       onClose();
     }
   }
 
   return (
-    <Modal title="Ajukan sengketa" onClose={onClose}>
+    <Modal title={iAmSeller ? "Uang belum masuk" : "Ajukan sengketa"} onClose={onClose}>
       <div className="stack">
         <p className="small" style={{ margin: 0, color: "var(--text-2)" }}>
-          Pencairan otomatis dihentikan. Penjual bisa mengembalikan dana, kamu bisa menerima barang, atau moderator memutus. Bila tidak selesai dalam 14 hari, dana kembali kepadamu.
+          {deal.direct
+            ? "KAMBE tidak memegang dana. Moderator menilai bukti kedua pihak (catatan transfer, resi, pernyataan) lalu mencatat putusan."
+            : "Pencairan otomatis dihentikan. Penjual bisa mengembalikan dana, kamu bisa menerima barang, atau moderator memutus. Bila tidak selesai dalam 14 hari, dana kembali kepadamu."}
         </p>
         <div className="field">
           <label htmlFor="dispute-reason">Alasan</label>
           <select id="dispute-reason" className="input" value={reason} onChange={(e) => setReason(e.target.value as DisputeReason)}>
-            {Object.entries(DISPUTE_REASONS).map(([k, v]) => (
+            {reasons.map((k) => (
               <option key={k} value={k}>
-                {v}
+                {DISPUTE_REASONS[k]}
               </option>
             ))}
           </select>
@@ -262,7 +266,14 @@ export function ResolutionNote({ deal }: { deal: Deal }) {
   return (
     <div className="tiny" style={{ padding: "8px 10px", borderRadius: 10, background: "color-mix(in srgb, var(--brand) 12%, transparent)" }}>
       <strong>
-        <Icon name="shieldCheck" size={12} /> Putusan {r.by === "system" ? "sistem" : "moderator"}: {r.decision === "refund" ? "dana dikembalikan ke pembeli" : "dana dicairkan ke penjual"}
+        <Icon name="shieldCheck" size={12} /> Putusan {r.by === "system" ? "sistem" : "moderator"}:{" "}
+        {deal.direct
+          ? r.decision === "refund"
+            ? "pembeli dimenangkan — kesepakatan dibatalkan, penjual wajib mengembalikan dana yang sudah diterima"
+            : "penjual dimenangkan — kesepakatan selesai"
+          : r.decision === "refund"
+            ? "dana dikembalikan ke pembeli"
+            : "dana dicairkan ke penjual"}
       </strong>
       <div style={{ whiteSpace: "pre-wrap" }}>
         {r.by === "system" ? (
@@ -351,7 +362,7 @@ function ModCase({ item }: { item: ModDispute }) {
       {decision ? (
         <div className="stack" style={{ gap: 6 }}>
           <label className="small" htmlFor={`reason-${d.id}`} style={{ fontWeight: 700 }}>
-            {decision === "refund" ? "Kembalikan dana ke pembeli" : "Cairkan dana ke penjual"} — alasan (terenkripsi untuk kedua pihak)
+            {d.direct ? (decision === "refund" ? "Menangkan pembeli" : "Menangkan penjual") : decision === "refund" ? "Kembalikan dana ke pembeli" : "Cairkan dana ke penjual"} — alasan (terenkripsi untuk kedua pihak)
           </label>
           <textarea id={`reason-${d.id}`} className="textarea" rows={3} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
           {error && <span className="error">{error}</span>}
@@ -370,8 +381,8 @@ function ModCase({ item }: { item: ModDispute }) {
         </div>
       ) : (
         <div className="row">
-          <button className="btn small danger grow" onClick={() => setDecision("refund")}>Refund ke pembeli</button>
-          <button className="btn small primary grow" onClick={() => setDecision("release")}>Cairkan ke penjual</button>
+          <button className="btn small danger grow" onClick={() => setDecision("refund")}>{d.direct ? "Menangkan pembeli" : "Refund ke pembeli"}</button>
+          <button className="btn small primary grow" onClick={() => setDecision("release")}>{d.direct ? "Menangkan penjual" : "Cairkan ke penjual"}</button>
         </div>
       )}
     </div>

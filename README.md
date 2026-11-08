@@ -35,7 +35,8 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 | `KAMBE_ORIGINS` | – | Daftar Origin yang diizinkan (koma). Kosong = harus sama dengan Host |
 | `KAMBE_FEE_PER_MILLE` | `0` | Fee platform per seribu (**default 0 = escrow gratis**; 25 = 2,5%; 50 = 5%; maks. 200). Tersimpan per kesepakatan saat dibuat; fee 0 = invoice gateway tanpa split rule |
 | `KAMBE_NOTARY_KEY` / `KAMBE_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
-| `KAMBE_PAYMENT_PROVIDER` | `simulasi` | `xendit` untuk gateway nyata (butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `KAMBE_PUBLIC_URL`, opsional `XENDIT_SPLIT_RULE_ID`) |
+| `KAMBE_PAYMENT_PROVIDER` | `langsung` | **`langsung`** = pembeli mentransfer sendiri ke info pembayaran penjual, KAMBE tidak memegang dana (boleh di produksi). `simulasi` = rekber tiruan (dev/tes saja). `xendit` = gateway nyata (disimpan; butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `KAMBE_PUBLIC_URL`) |
+| `KAMBE_FREE_PLATFORM` | `1` | Platform gratis sepenuhnya (semua fitur PRO terbuka, langganan dimatikan). `0` = alur PRO lama |
 | `KAMBE_PUBLIC_URL` | – | Alamat publik aplikasi (tujuan kembali setelah bayar di gateway) |
 | `KAMBE_SERVE_DIST` | – | Khusus uji: `1` + `NODE_ENV=test` = sajikan `dist/` dengan pembayaran simulasi. Di mode lain server menolak start. **Jangan dipakai untuk deployment** (pakai `NODE_ENV=production`) |
 | `VITE_NOTARY_PUBLIC_KEY` | – | (saat build) kunci publik notaris yang ditanam di aplikasi/APK; tanpa ini klien mem-pin kunci saat pertama terlihat |
@@ -47,10 +48,10 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 ## Pengujian
 
 ```bash
-pnpm test           # 146 tes: kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
+pnpm test           # 158 tes: kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
                     # sengketa/moderator, PIN Bayang/Radar Arwah, Jejak, notaris (server sungguhan, DB di memori),
                     # env KAMBE_*/PINPATH_*, kompatibilitas data era PINPath + regresi red-team
-pnpm build && pnpm test:browser   # 8 suite Chromium headless: chat, dagang+moderator, Fase 3, brankas perangkat, audit HP, Panic Wipe, Etalase Hantu, UI v2
+pnpm build && pnpm test:browser   # 9 suite Chromium headless: chat, rekber(dorman)+moderator, Fase 3, brankas, audit HP, Panic Wipe, Etalase Hantu, UI v2, kesepakatan langsung
 ```
 
 Tes browser mencakup: undangan PIN, chat E2EE, status D/R, PING!!!, safety number,
@@ -63,7 +64,10 @@ Rancangan lengkap: [`docs/superpowers/specs/2026-11-09-kambe-v2-design.md`](docs
 
 | Fitur | Ringkas |
 |---|---|
-| **Escrow gratis** | Fee platform default 0% (`KAMBE_FEE_PER_MILLE=0`); invoice gateway tanpa split rule bila fee 0. Pemasukan: KAMBE PRO |
+| **Gratis sepenuhnya** | Tanpa PRO, tanpa fee. Semua orang bisa memajang etalase & menawarkan kesepakatan |
+| **Kesepakatan langsung** | Penjual kirim info pembayaran (satu ketukan) → pembeli transfer sendiri & tekan **Sudah transfer** (+catatan opsional, tersegel) → penjual **Uang diterima · kirim** (atau **Uang belum masuk**) → pembeli **Barang diterima · selesai**. KAMBE tidak memegang dana; notaris & Buku Jejak mencatat setiap langkah; moderator menilai bukti sengketa tanpa memindahkan uang |
+| **Info pembayaran** | Rekening bank atau dompet kripto (**disarankan**) disimpan terenkripsi di brankas perangkat, dikirim ke lawan lewat E2EE, dengan tombol salin. E-wallet tidak didukung (nomornya = nomor HP) |
+| **Pemblokir kontak luar** | Nomor HP, nomor panjang (rekening), email, tautan WA/Telegram/IG, dan "WA: …" ditolak di chat, status, catatan, Jejak, etalase, dan judul kesepakatan (di perangkat, sebelum dienkripsi); headline Radar ditolak server; penerima menyamarkan bila lolos |
 | **Panic Wipe** | Tahan 2 detik (Pengaturan): cabut sesi server, hapus IndexedDB, Cache Storage, localStorage, service worker, lalu muat ulang bersih |
 | **Etalase Hantu** | Katalog tinggal di HP penjual (terenkripsi di brankas, hangus 72 jam, maks. 30 barang). Pembeli memintanya lewat pesan kendali E2EE; HP penjual menjawab otomatis. Katalog lawan hanya di memori. Pesanan → tawaran rekber otomatis |
 | **Buku Jejak Transaksi** | Tiap kuitansi notaris yang sah dicatat sebagai entri bertanda tangan Ed25519 perangkat (kunci dari frasa kunci), dirantai, dan dipertukarkan dengan lawan. Cocok = tiga tanda tangan (notaris + kamu + lawan). Beda = peringatan + ekspor bukti (tidak otomatis jadi sengketa) |
@@ -115,7 +119,8 @@ pengguna hanya tersimpan sebagai ciphertext.
 
 - **PRO Rp49.000/bln** (divalidasi server, idempoten): membuka etalase & tawaran kesepakatan dari chat.
 - **Etalase hanya untuk kontak** yang sudah disetujui (bukan publik).
-- **Alur rekber**: `AWAITING_PAYMENT → HELD (dana ditahan) → SHIPPED → COMPLETED (dana cair utuh — escrow gratis)`.
+- **Alur langsung (default)**: `AWAITING_PAYMENT (menunggu transfer) → HELD (pembeli sudah transfer) → SHIPPED (uang diterima · dikirim) → COMPLETED`. Tanpa buku besar & tanpa refund otomatis.
+- **Alur rekber (disimpan, `KAMBE_PAYMENT_PROVIDER=simulasi|xendit`)**: `AWAITING_PAYMENT → HELD (dana ditahan) → SHIPPED → COMPLETED (dana cair)`.
   Pembatalan sebelum bayar; penjual bisa refund penuh tanpa fee; pembeli bisa sengketa (menghentikan pencairan otomatis).
 - **Tenggat anti-sandera (kedua arah)** — dana tidak pernah bisa terkunci selamanya:
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { GHOST_DESC_MAX, GHOST_MAX_ITEMS, GHOST_TITLE_MAX } from "../../../shared/ctl.ts";
 import { PRICE_MAX, PRICE_MIN } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
+import { maskContacts } from "../../../shared/contactguard.ts";
 import { Modal, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 
@@ -92,7 +93,7 @@ function PeerView({ peer, peerAlias }: { peer: string; peerAlias: string }) {
   return (
     <div className="stack">
       <div className="hint">
-        <Icon name="lock" size={12} /> Katalog ini hanya ada di layarmu — tidak disimpan. Memesan membuat <strong>tawaran rekber</strong> di chat; uang baru bergerak saat kamu membayar.
+        <Icon name="lock" size={12} /> Katalog ini hanya ada di layarmu — tidak disimpan. Memesan membuat <strong>kartu kesepakatan</strong> di chat; kamu mentransfer sendiri ke info pembayaran penjual.
       </div>
       <div className="list">
         {view.items.map((it) => {
@@ -100,10 +101,10 @@ function PeerView({ peer, peerAlias }: { peer: string; peerAlias: string }) {
           return (
             <div key={it.id} className="item" style={{ alignItems: "flex-start", cursor: "default" }}>
               <div className="grow">
-                <span className="name">{it.title}</span>
+                <span className="name">{maskContacts(it.title).text}</span>
                 {it.description && (
                   <div className="small" style={{ color: "var(--text-2)", marginTop: 4, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                    {it.description}
+                    {maskContacts(it.description).text}
                   </div>
                 )}
                 <div className="tiny muted" style={{ marginTop: 4 }}>
@@ -163,7 +164,7 @@ function MyView() {
   return (
     <div className="stack">
       <div className="hint">
-        <Icon name="clock" size={12} /> Barangmu hangus otomatis 72 jam setelah dipajang. Katalog tersimpan terenkripsi di perangkat ini dan dikirim langsung ke kontak yang membukanya — server tidak menyimpannya. Memesan butuh akun PRO agar rekber bisa dibuat.
+        <Icon name="clock" size={12} /> Barangmu hangus otomatis 72 jam setelah dipajang. Katalog tersimpan terenkripsi di perangkat ini dan dikirim langsung ke kontak yang membukanya — server tidak menyimpannya. Pesanan otomatis menjadi kartu kesepakatan di chat.
       </div>
       <div className="stack card">
         <div className="field">

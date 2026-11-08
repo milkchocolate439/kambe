@@ -49,6 +49,8 @@ import {
   type GhostItem,
   type NackReason,
 } from "../../../shared/ctl.ts";
+import { findContactLeak, LEAK_MESSAGE } from "../../../shared/contactguard.ts";
+import { encodePayInfo, PAY_METHODS_MAX, validatePayMethod, type PayMethod } from "../../../shared/payinfo.ts";
 import { api, ApiError } from "./api.ts";
 import { keystore, type LocalMessage, type PinnedKey, type UnlockedDevice } from "./keystore.ts";
 import { BACKUP_MAX_BYTES, decryptBackup, encryptBackup } from "../../../shared/vault.ts";
@@ -63,6 +65,7 @@ import {
   STATEMENT_MAX,
   type DealContent,
   type DealKeys,
+  type PaymentProofContent,
   type LabelContent,
   type ProductContent,
   type ResolutionContent,
@@ -83,7 +86,7 @@ export interface ChatMessage {
   id: string;
   mine: boolean;
   /** locked = terenkripsi untuk perangkat lain; broken = gagal dibuka/diubah di jalan */
-  kind: "text" | "ping" | "identity" | "locked" | "broken";
+  kind: "text" | "ping" | "identity" | "payinfo" | "locked" | "broken";
   text: string;
   createdAt: number;
   status: MsgStatus;
@@ -204,6 +207,8 @@ export interface State {
   ghostOrders: Record<string, GhostOrder>;
   // Buku Jejak Transaksi
   txlog: Record<string, TxStatus>;
+  // Info pembayaran milikku (brankas)
+  payMethods: PayMethod[] | null;
 }
 
 const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3, X: 1 };
@@ -216,7 +221,7 @@ interface BackupData {
   receipts: Record<string, number>;
 }
 
-const MSG_KINDS = new Set(["text", "ping", "identity", "locked", "broken"]);
+const MSG_KINDS = new Set(["text", "ping", "identity", "payinfo", "locked", "broken"]);
 const MSG_STATUSES = new Set(["pending", "S", "D", "R", "failed"]);
 
 /** Validasi ketat: cadangan berasal dari luar aplikasi, jangan percaya bentuknya. */
@@ -283,6 +288,7 @@ export class Messenger {
       ghostViews: {},
       ghostOrders: {},
       txlog: {},
+      payMethods: null,
     };
     this.rt = new Realtime(
       (ev) => void this.onEvent(ev),
@@ -579,10 +585,19 @@ export class Messenger {
     }
   }
 
+  /** Tolak teks yang membagikan nomor HP / kontak luar (dijalankan SEBELUM dienkripsi). */
+  private guard(...texts: string[]) {
+    for (const t of texts) {
+      const leak = findContactLeak(t);
+      if (leak) throw new ApiError(400, "contact_blocked", LEAK_MESSAGE[leak.kind]);
+    }
+  }
+
   async invite(pin: string, note: string) {
     // Catatan undangan disegel untuk pemilik PIN; kunci publiknya diambil lewat PIN (tanpa ID internal).
     let sealedNote;
     const text = cleanDisplayText(note, NOTE_MAX);
+    this.guard(text);
     if (text) {
       const { publicKey } = await api<{ publicKey: string | null }>("POST", "/api/contacts/lookup", { pin });
       if (!publicKey) throw new ApiError(409, "no_key", "Pemilik PIN belum pernah membuka KAMBE, jadi catatan terenkripsi belum bisa dikirim. Kirim tanpa catatan.");
@@ -652,6 +667,7 @@ export class Messenger {
   /** Status pribadi: disegel untuk semua kontak; kosong = hapus. */
   async updateStatus(text: string) {
     const clean = cleanDisplayText(text, PM_MAX);
+    this.guard(clean);
     const { me } = clean
       ? await api<{ me: Me }>("PUT", "/api/me/status", { sealed: await this.sealAs("pm", { text: clean }, this.contactRecipients()) })
       : await api<{ me: Me }>("DELETE", "/api/me/status");
@@ -786,6 +802,7 @@ export class Messenger {
       description: cleanDisplayText(p.description, PRODUCT_DESC_MAX),
       sector: p.sector,
     };
+    this.guard(content.title, content.description);
     const sealed = await this.sealAs("product", content, this.contactRecipients());
     await api(p.id ? "PATCH" : "POST", p.id ? `/api/products/${p.id}` : "/api/products", { price: p.price, sealed });
     await this.loadMyStore();
@@ -913,6 +930,7 @@ export class Messenger {
   /** Judul kesepakatan disegel untuk penjual & moderator (diambil dari isi produk yang sudah didekripsi). */
   async createDeal(peer: string, productId: string, idempotencyKey: string, title: string) {
     const content: DealContent = { title: cleanDisplayText(title, PRODUCT_TITLE_MAX) };
+    this.guard(content.title);
     const sealed = await this.sealAs("deal", content, [this.counterpart(peer), ...(await this.modRecipients())]);
     const deal = await api<Deal>("POST", "/api/deals", { productId, idempotencyKey, sealed });
     this.upsertDeal(peer, deal);
@@ -921,6 +939,7 @@ export class Messenger {
 
   async offerDeal(peer: string, title: string, price: number, idempotencyKey: string) {
     const content: DealContent = { title: cleanDisplayText(title, PRODUCT_TITLE_MAX) };
+    this.guard(content.title);
     const sealed = await this.sealAs("deal", content, [this.counterpart(peer), ...(await this.modRecipients())]);
     const deal = await api<Deal>("POST", "/api/deals/offer", { buyerId: peer, price, idempotencyKey, sealed });
     this.upsertDeal(peer, deal);
@@ -928,8 +947,14 @@ export class Messenger {
   }
 
   /** "ship" butuh bukti kirim, "dispute" butuh cerita — keduanya disegel untuk pembeli, penjual & moderator. */
-  async dealAction(peer: string, dealId: string, action: DealAction, content?: ShipmentContent | StatementContent) {
+  async dealAction(peer: string, dealId: string, action: DealAction, content?: ShipmentContent | StatementContent | PaymentProofContent) {
     let body: Record<string, unknown> | undefined;
+    const direct = this.state.deals[peer]?.find((d) => d.id === dealId)?.direct;
+    if (action === "pay" && direct) {
+      // "Sudah transfer": catatan/bukti opsional, disegel untuk pembeli, penjual & moderator.
+      const note = content && "note" in content ? cleanDisplayText(content.note, STATEMENT_MAX) : "";
+      body = note ? { sealed: await this.sealAs("payment", { note } satisfies PaymentProofContent, await this.dealRecipients(dealId)) } : {};
+    }
     if (action === "ship" || action === "dispute") {
       if (!content) throw new ApiError(400, "content_required", action === "ship" ? "Bukti kirim wajib diisi" : "Ceritakan masalahnya");
       body = { sealed: await this.sealAs(action === "ship" ? "shipment" : "statement", content, await this.dealRecipients(dealId)) };
@@ -978,6 +1003,7 @@ export class Messenger {
   /** Enkripsi momen untuk setiap kontak (yang kuncinya sudah diakui) + salinan diri sendiri. */
   async postMoment(type: MomentType, text: string): Promise<number> {
     if (this.state.device !== "ok" || !this.identity) throw new ApiError(409, "device", "Perangkat ini belum aktif untuk akunmu");
+    this.guard(text);
     for (let attempt = 0; attempt < 2; attempt++) {
       await this.refreshContacts();
       const myKey = this.identity.publicKey;
@@ -1076,6 +1102,52 @@ export class Messenger {
     }
   }
 
+  // ------------------------------------------------ info pembayaran ---
+  // Rekening bank / dompet kripto disimpan TERENKRIPSI di brankas perangkat (bukan di server) dan hanya
+  // dikirim ke lawan transaksi sebagai pesan E2EE "payinfo".
+
+  async loadPayMethods(): Promise<PayMethod[]> {
+    const raw = await keystore.getSecret<unknown[]>(this.state.me.id, "pay-methods").catch(() => undefined);
+    const list: PayMethod[] = [];
+    for (const r of Array.isArray(raw) ? raw : []) {
+      try {
+        list.push(validatePayMethod(r));
+      } catch {
+        /* rekaman rusak dibuang */
+      }
+    }
+    this.set({ payMethods: list });
+    return list;
+  }
+
+  async savePayMethod(input: Omit<PayMethod, "id">): Promise<PayMethod> {
+    const list = await this.loadPayMethods();
+    if (list.length >= PAY_METHODS_MAX) throw new ApiError(409, "too_many", `Maksimal ${PAY_METHODS_MAX} info pembayaran`);
+    let m: PayMethod;
+    try {
+      m = validatePayMethod({ ...input, id: newId() });
+    } catch (e) {
+      throw new ApiError(400, "bad_pay_method", (e as Error).message);
+    }
+    const next = [...list, m];
+    await keystore.putSecret(this.state.me.id, "pay-methods", next);
+    this.set({ payMethods: next });
+    return m;
+  }
+
+  async removePayMethod(id: string) {
+    const next = (await this.loadPayMethods()).filter((m) => m.id !== id);
+    await keystore.putSecret(this.state.me.id, "pay-methods", next);
+    this.set({ payMethods: next });
+  }
+
+  /** Kirim satu info pembayaran ke lawan transaksi (pesan E2EE, bukan teks bebas). */
+  async sendPayInfo(peer: string, id: string): Promise<boolean> {
+    const m = (this.state.payMethods ?? (await this.loadPayMethods())).find((x) => x.id === id);
+    if (!m) throw new ApiError(404, "not_found", "Info pembayaran tidak ditemukan");
+    return this.send(peer, { kind: "payinfo", text: encodePayInfo(m) });
+  }
+
   /** Identitas asli dikirim sebagai pesan E2EE biasa — server tidak pernah melihat isinya. */
   shareIdentity(peer: string, text: string) {
     return this.send(peer, { kind: "identity", text });
@@ -1146,6 +1218,13 @@ export class Messenger {
       this.toast(blocker, "warn");
       return false;
     }
+    if (payload.kind === "text") {
+      const leak = findContactLeak(payload.text);
+      if (leak) {
+        this.toast(LEAK_MESSAGE[leak.kind], "warn");
+        return false;
+      }
+    }
     const isPing = payload.kind === "ping";
     if (isPing) {
       const last = this.lastPingSent.get(peer) ?? 0;
@@ -1171,7 +1250,7 @@ export class Messenger {
     const msg = this.state.threads[peer]?.messages.find((m) => m.id === id);
     if (!msg || msg.status !== "failed") return;
     this.setThread(peer, (t) => ({ ...t, messages: t.messages.filter((m) => m.id !== id) }));
-    if (msg.kind === "text" || msg.kind === "identity") void this.send(peer, { kind: msg.kind, text: msg.text });
+    if (msg.kind === "text" || msg.kind === "identity" || msg.kind === "payinfo") void this.send(peer, { kind: msg.kind, text: msg.text });
   }
 
   // -------------------------------------- Buku Jejak Transaksi (3 ttd) ---
@@ -1377,6 +1456,7 @@ export class Messenger {
   async addGhostItem(p: { title: string; description: string; price: number }) {
     const store = await this.loadGhostStore();
     if (store.items.length >= GHOST_MAX_ITEMS) throw new ApiError(409, "too_many_items", `Maksimal ${GHOST_MAX_ITEMS} barang di Etalase Hantu`);
+    this.guard(p.title, p.description);
     let item: GhostItem;
     try {
       item = validateItem({ id: newId(), title: p.title, description: p.description, price: p.price, expiresAt: Date.now() + GHOST_TTL_MS });

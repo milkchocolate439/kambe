@@ -271,7 +271,10 @@ function migrate(db: DatabaseSync) {
     if (!cols.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
   };
   addCol("users", "pm_object", "TEXT");
-  addCol("users", "sign_key", "TEXT"); // kunci publik Ed25519 Buku Jejak Transaksi (kunci privat tidak pernah ke server)
+  addCol("users", "sign_key", "TEXT");
+  // Kesepakatan langsung (tanpa escrow) & bukti transfer tersegel.
+  addCol("deals", "direct", "INTEGER NOT NULL DEFAULT 0");
+  addCol("deals", "payment_object", "TEXT"); // kunci publik Ed25519 Buku Jejak Transaksi (kunci privat tidak pernah ke server)
   // Retensi 30 hari: waktu pesan belum terkirim ditandai "expired" (ciphertext sudah dikosongkan).
   addCol("messages", "expired_at", "INTEGER");
   addCol("contact_requests", "note_object", "TEXT");

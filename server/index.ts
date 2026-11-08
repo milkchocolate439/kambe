@@ -3,20 +3,25 @@ import { dirname, join } from "node:path";
 import { createApp } from "./app.ts";
 import { defaultDbPath, readEnv, staticDirFor } from "./env.ts";
 import { loadNotaryKey } from "./notary.ts";
-import { simulatedProvider, xenditProvider, type PaymentProvider } from "./payments.ts";
+import { directProvider, simulatedProvider, xenditProvider, type PaymentProvider } from "./payments.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const env = process.env;
 const production = env.NODE_ENV === "production";
 
-/** Default SIMULASI. Gateway nyata hanya bila dinyalakan eksplisit & semua kunci (server-only) tersedia. */
+/**
+ * Default LANGSUNG: pembeli mentransfer sendiri ke info pembayaran penjual; KAMBE tidak memegang dana.
+ * "simulasi" (rekber tiruan) hanya untuk pengembangan & tes; "xendit" = gateway nyata (disimpan).
+ */
 function paymentProvider(): PaymentProvider {
-  const provider = readEnv(env, "PAYMENT_PROVIDER");
+  const provider = readEnv(env, "PAYMENT_PROVIDER") ?? "langsung";
+  if (!["langsung", "simulasi", "xendit"].includes(provider)) throw new Error(`KAMBE_PAYMENT_PROVIDER tidak dikenal: ${provider}`);
   // Produksi tidak boleh berjalan dengan simulasi: "bayar" di sana tidak memindahkan uang sungguhan.
-  if (production && provider !== "xendit") {
-    throw new Error("NODE_ENV=production butuh KAMBE_PAYMENT_PROVIDER=xendit (simulasi ditolak di produksi)");
+  if (production && provider === "simulasi") {
+    throw new Error("NODE_ENV=production menolak KAMBE_PAYMENT_PROVIDER=simulasi (pakai langsung atau xendit)");
   }
-  if (provider !== "xendit") return simulatedProvider;
+  if (provider === "langsung") return directProvider;
+  if (provider === "simulasi") return simulatedProvider;
   const publicUrl = readEnv(env, "PUBLIC_URL");
   const missing = [
     ...["XENDIT_SECRET_KEY", "XENDIT_CALLBACK_TOKEN"].filter((k) => !env[k]),
@@ -45,6 +50,8 @@ const app = createApp({
   notaryKey: loadNotaryKey(readEnv(env, "NOTARY_KEY"), readEnv(env, "NOTARY_KEY_FILE") ?? join(root, "data", "notary.key")),
   feePerMille: feePerMille ? Number(feePerMille) : undefined,
   payments: paymentProvider(),
+  // Platform gratis sepenuhnya kecuali dimatikan eksplisit (KAMBE_FREE_PLATFORM=0).
+  freePlatform: readEnv(env, "FREE_PLATFORM") !== "0",
   log: (m) => console.error(m),
 });
 

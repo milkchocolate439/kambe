@@ -13,6 +13,8 @@ export interface ProductContent { title: string; description: string; sector: st
 export interface DealContent { title: string }
 export interface ShipmentContent { courier: string; tracking: string | null; note: string }
 export interface StatementContent { reason?: DisputeReason; text: string }
+/** Bukti/catatan transfer dari pembeli pada kesepakatan langsung (tersegel untuk pembeli, penjual & moderator). */
+export interface PaymentProofContent { note: string }
 export interface ResolutionContent { reason: string }
 
 /** Kunci publik pihak-pihak sebuah kesepakatan, untuk menyegel isi terkait (bukti kirim, pernyataan, …). */
@@ -222,7 +224,9 @@ export function platformFee(price: number, perMille: number = FEE_PER_MILLE): nu
 export interface PublicConfig {
   feePerMille: number;
   notaryPublicKey: string;
-  paymentProvider: "simulasi" | "xendit";
+  paymentProvider: "simulasi" | "xendit" | "langsung";
+  /** true = platform gratis sepenuhnya (tanpa PRO). */
+  freePlatform: boolean;
 }
 
 export interface ProStatus {
@@ -285,6 +289,13 @@ export interface Deal {
   receipt: SignedReceipt | null;
   /** Halaman bayar gateway (mode gateway); null pada mode simulasi. */
   paymentUrl: string | null;
+  /**
+   * true = kesepakatan LANGSUNG: pembeli mentransfer sendiri ke info pembayaran penjual; KAMBE tidak
+   * memegang dana. Status tetap dicatat notaris (pay = "sudah transfer", ship = "uang diterima · kirim").
+   */
+  direct: boolean;
+  /** Bukti/catatan transfer pembeli (PaymentProofContent), kesepakatan langsung saja. */
+  payment: SealedView | null;
 }
 
 // ---------------------------------------------------- Fase 3: sengketa ---
@@ -314,6 +325,7 @@ export const DISPUTE_REASONS = {
   not_received: "Barang/jasa tidak diterima",
   not_as_described: "Tidak sesuai deskripsi",
   damaged: "Rusak atau cacat",
+  payment_missing: "Uang belum masuk (penjual)",
   other: "Lainnya",
 } as const;
 export type DisputeReason = keyof typeof DISPUTE_REASONS;

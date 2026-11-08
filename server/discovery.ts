@@ -5,6 +5,7 @@
 //    PIN radar khusus, bukan PIN utama. Undangan tetap wajib disetujui seperti biasa.
 
 import type { IncomingMessage } from "node:http";
+import { findContactLeak, LEAK_MESSAGE } from "../shared/contactguard.ts";
 import { tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Handler, type Row } from "./http.ts";
 import type { SealedStore } from "./sealed.ts";
@@ -108,6 +109,8 @@ export function registerDiscovery(d: DiscoveryDeps) {
     if (!(SECTORS as readonly string[]).includes(sector)) throw new HttpError(400, "bad_sector", "Sektor tidak dikenal");
     const headline = d.cleanText(d.str(body, "headline", { min: 1, max: RADAR_HEADLINE_MAX * 2 })).slice(0, RADAR_HEADLINE_MAX);
     if (headline.length < 10) throw new HttpError(400, "bad_headline", "Tulis kebutuhan/tawaranmu minimal 10 karakter");
+    const leak = findContactLeak(headline);
+    if (leak) throw new HttpError(400, "contact_blocked", LEAK_MESSAGE[leak.kind]);
     d.limit(`radar-write:${user.id}`, 10, 24 * HOUR, "Radar Arwah terlalu sering diubah hari ini.");
     const now = Date.now();
     const expires = now + RADAR_TTL_MS;

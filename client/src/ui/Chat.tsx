@@ -5,6 +5,8 @@ import { Avatar, dayOf, Modal, timeOf, useMessenger } from "./common.tsx";
 import { CatalogModal, DealCard, OfferModal, StoreModal } from "./Commerce.tsx";
 import { GhostStoreModal } from "./GhostStore.tsx";
 import { ContactProfile } from "./Profile.tsx";
+import { PayInfoCard } from "./Payments.tsx";
+import { maskContacts } from "../../../shared/contactguard.ts";
 import { Icon } from "./icons.tsx";
 import type { Deal } from "../../../shared/protocol.ts";
 
@@ -18,7 +20,7 @@ const EMOJI_FAVORITES = ["😍", "💕", "😊", "🎉", "🎇", "😜", "👏",
 // Deteksi pola penipuan umum — berjalan HANYA di perangkat, setelah pesan didekripsi.
 const SCAM_PATTERNS: [RegExp, string][] = [
   [/\b(otp|kode\s*(verifikasi|otp|aktivasi)|pin\s*atm|cvv)\b/i, "Jangan pernah membagikan OTP, PIN ATM, atau kode verifikasi kepada siapa pun."],
-  [/\b(transfer|tf)\b.{0,40}\b(dulu|langsung|di\s*luar|rekening\s*pribadi)\b|\brekening\s*pribadi\b/i, "Hati-hati diminta transfer langsung ke rekening pribadi. Penipu sering memakai cara ini."],
+  [/\b(transfer|tf)\b.{0,40}\b(dulu|langsung|di\s*luar|rekening\s*pribadi)\b|\brekening\s*pribadi\b/i, "Transfer hanya ke kartu INFO PEMBAYARAN resmi dari kartu kesepakatan, lalu tekan \"Sudah transfer\" supaya tercatat. Jangan transfer ke nomor yang diketik di chat."],
   [/\b(bit\.ly|tinyurl\.com|s\.id|wa\.me|t\.me)\//i, "Pesan ini berisi tautan pendek/eksternal. Periksa dulu sebelum membukanya."],
   [/\.(apk|exe|scr|bat)\b/i, "Jangan pasang file aplikasi (.apk/.exe) dari orang yang belum kamu kenal."],
 ];
@@ -238,7 +240,7 @@ export function Chat() {
               Kamu terhubung dengan <strong>{contact.alias}</strong>. Pesan di sini terenkripsi end-to-end.
               <br />
               <br />
-              <Icon name="alert" size={13} /> Untuk transaksi dengan orang asing, jangan transfer di luar sistem dan jangan bagikan OTP.
+              <Icon name="alert" size={13} /> Bertransaksi lewat kartu kesepakatan supaya tercatat. Nomor HP & kontak luar tidak bisa dibagikan di KAMBE. Jangan pernah bagikan OTP.
             </div>
           </div>
         )}
@@ -284,7 +286,7 @@ export function Chat() {
           onClick={() => setShop(s.pro?.active ? "offer" : "upgrade")}
           disabled={!!blocker}
           aria-label="Tawarkan kesepakatan rekber"
-          title="Tawarkan kesepakatan rekber (PRO)"
+          title="Tawarkan kesepakatan"
         >
           <Icon name="handshake" />
         </button>
@@ -461,11 +463,13 @@ function Bubble({ msg, peerAlias, onRetry, onOpen }: { msg: ChatMessage; peerAli
     );
   }
   const special = msg.kind === "locked" || msg.kind === "broken";
+  // Penerima: samarkan nomor HP/kontak luar bila pengirim melewati penjaga (mis. aplikasi dimodifikasi).
+  const shown = !msg.mine && msg.kind === "text" ? maskContacts(msg.text) : { text: msg.text, masked: false };
   const warn = !msg.mine && msg.kind === "text" ? scamWarning(msg.text) : null;
   return (
     <div className={`bubble-row ${msg.mine ? "mine" : ""}`}>
       <div
-        className={`bubble ${special ? "special" : ""} ${msg.kind === "identity" ? "identity" : ""} ${msg.status === "failed" ? "failed" : ""}`}
+        className={`bubble ${special ? "special" : ""} ${msg.kind === "identity" || msg.kind === "payinfo" ? "identity" : ""} ${msg.status === "failed" ? "failed" : ""}`}
         onClick={onOpen}
         onKeyDown={onOpen ? (e) => e.key === "Enter" && onOpen() : undefined}
         role={onOpen ? "button" : undefined}
@@ -486,7 +490,14 @@ function Bubble({ msg, peerAlias, onRetry, onOpen }: { msg: ChatMessage; peerAli
             <Icon name="alert" size={14} /> {msg.error ?? "Pesan rusak atau diubah di jalan."}
           </span>
         )}
-        {(msg.kind === "text" || msg.kind === "identity") && msg.text}
+        {msg.kind === "payinfo" && <PayInfoCard text={msg.text} mine={msg.mine} />}
+        {msg.kind === "text" && shown.text}
+        {msg.kind === "identity" && msg.text}
+        {shown.masked && (
+          <div className="scam">
+            <Icon name="shield" size={13} /> Nomor HP/kontak luar disembunyikan KAMBE.
+          </div>
+        )}
         {msg.kind === "identity" && !msg.mine && (
           <div className="scam">
             <Icon name="shield" size={13} /> Data pribadi {peerAlias}. Gunakan hanya untuk transaksi ini dan jangan disebarkan.

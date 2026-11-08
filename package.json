@@ -13,7 +13,7 @@
     "start": "NODE_ENV=production node --import tsx server/index.ts",
     "typecheck": "tsc -b",
     "test": "node --import tsx --test --test-timeout=30000 --test-force-exit tests/*.test.ts",
-    "test:browser": "node --import tsx tests/browser/e2e.ts && node --import tsx tests/browser/commerce-e2e.ts && node --import tsx tests/browser/discovery-e2e.ts && node --import tsx tests/browser/vault-e2e.ts && node --import tsx tests/browser/audit-e2e.ts && node --import tsx tests/browser/panic-e2e.ts && node --import tsx tests/browser/ghost-e2e.ts && node --import tsx tests/browser/ui-v2-e2e.ts"
+    "test:browser": "node --import tsx tests/browser/e2e.ts && node --import tsx tests/browser/commerce-e2e.ts && node --import tsx tests/browser/discovery-e2e.ts && node --import tsx tests/browser/vault-e2e.ts && node --import tsx tests/browser/audit-e2e.ts && node --import tsx tests/browser/panic-e2e.ts && node --import tsx tests/browser/ghost-e2e.ts && node --import tsx tests/browser/ui-v2-e2e.ts && node --import tsx tests/browser/direct-e2e.ts"
   },
   "dependencies": {
     "react": "^19.1.0",

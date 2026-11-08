@@ -54,7 +54,7 @@ async function main() {
   await seed.close();
   const server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
     // Bukan produksi: skenario ini butuh pembayaran simulasi, yang (benar) ditolak di produksi.
-    env: { ...process.env, NODE_ENV: "test", KAMBE_SERVE_DIST: "1", PORT: String(PORT), KAMBE_DB: dbPath, KAMBE_MODERATORS: modId },
+    env: { ...process.env, NODE_ENV: "test", KAMBE_SERVE_DIST: "1", PORT: String(PORT), KAMBE_DB: dbPath, KAMBE_MODERATORS: modId, KAMBE_PAYMENT_PROVIDER: "simulasi", KAMBE_FREE_PLATFORM: "0" }, // alur rekber + PRO yang disimpan (dorman)
     stdio: ["ignore", "inherit", "inherit"],
   });
   let browser: Browser | null = null;

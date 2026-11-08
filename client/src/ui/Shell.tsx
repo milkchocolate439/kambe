@@ -22,6 +22,7 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
     if (s.activePeer) setMoments(false);
   }, [s.activePeer]);
 
+  const proBadge = !!s.pro?.active && !s.config?.freePlatform;
   const openJejak = () => {
     void m.openThread(null);
     setMoments(true);
@@ -77,8 +78,8 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
             <Icon name="shieldCheck" />
           </button>
         )}
-        <button className="btn ghost icon tb-action" onClick={() => setStore(true)} aria-label="Toko & Dompet" title="Toko & Dompet (simulasi)" style={{ color: s.pro?.active ? "var(--amber)" : undefined }}>
-          <Icon name={s.pro?.active ? "crown" : "store"} />
+        <button className="btn ghost icon tb-action" onClick={() => setStore(true)} aria-label="Toko & Dompet" title="Toko & Dompet" style={{ color: proBadge ? "var(--amber)" : undefined }}>
+          <Icon name={proBadge ? "crown" : "store"} />
         </button>
         <button className="btn ghost icon tb-action" onClick={() => setSettings(true)} aria-label="Pengaturan">
           <Icon name="settings" />
@@ -146,7 +147,7 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
             </button>
           )}
           <button className="dock-btn" aria-label="Toko & Dompet" onClick={() => setStore(true)}>
-            <Icon name={s.pro?.active ? "crown" : "store"} size={20} />
+            <Icon name={proBadge ? "crown" : "store"} size={20} />
             <span className="dock-label" aria-hidden="true">Toko</span>
           </button>
           <button className="dock-btn" aria-label="Pengaturan" onClick={() => setSettings(true)}>

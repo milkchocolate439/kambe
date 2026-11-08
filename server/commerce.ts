@@ -58,6 +58,8 @@ export interface CommerceDeps {
   /** Fee platform per seribu (50 = 5%). Disalin ke setiap kesepakatan saat dibuat. */
   feePerMille: number;
   payments: PaymentProvider;
+  /** Platform gratis sepenuhnya: semua fitur PRO terbuka untuk semua orang; langganan dimatikan. */
+  freePlatform: boolean;
   readRaw: (req: IncomingMessage, maxBytes?: number) => Promise<string>;
   log: (msg: string) => void;
   sealed: SealedStore;
@@ -111,8 +113,37 @@ const TRANSITIONS: Record<Actor, Table> = {
   },
 };
 
+/**
+ * Kesepakatan LANGSUNG: KAMBE tidak memegang dana, jadi tidak ada "tarik dana" pembeli, refund otomatis,
+ * maupun sengketa yang kedaluwarsa menjadi refund. Status hanya mencatat apa yang dinyatakan para pihak.
+ *  - pay  (pembeli) = "Sudah transfer"            - ship (penjual) = "Uang diterima · kirim"
+ *  - dispute (penjual, HELD) = "Uang belum masuk" - refund (penjual) = "Dana sudah kukembalikan"
+ */
+const DIRECT_TRANSITIONS: Record<Actor, Table> = {
+  buyer: {
+    AWAITING_PAYMENT: { pay: "HELD", cancel: "CANCELLED" },
+    HELD: { confirm: "COMPLETED", dispute: "DISPUTED" },
+    SHIPPED: { confirm: "COMPLETED", dispute: "DISPUTED" },
+    DISPUTED: { confirm: "COMPLETED" },
+  },
+  seller: {
+    AWAITING_PAYMENT: { cancel: "CANCELLED" },
+    HELD: { ship: "SHIPPED", refund: "REFUNDED", dispute: "DISPUTED" },
+    SHIPPED: { refund: "REFUNDED" },
+    DISPUTED: { refund: "REFUNDED" },
+  },
+  system: {
+    SHIPPED: { confirm: "COMPLETED" }, // selesai otomatis bila pembeli diam setelah barang dikirim
+  },
+  moderator: {
+    DISPUTED: { refund: "REFUNDED", confirm: "COMPLETED" }, // hanya mencatat putusan; tidak ada uang yang dipindah
+  },
+};
+
+const tableFor = (r: Row) => (r.direct ? DIRECT_TRANSITIONS : TRANSITIONS);
+
 /** Kolom tambahan yang boleh ditulis bersama transisi (daftar putih — tidak ada nama kolom dari input). */
-const EXTRA_COLUMNS = ["resolution", "resolved_by", "shipment_object", "resolution_object"] as const;
+const EXTRA_COLUMNS = ["resolution", "resolved_by", "shipment_object", "resolution_object", "payment_object"] as const;
 type Extra = Partial<Record<(typeof EXTRA_COLUMNS)[number], string | null>>;
 
 export function registerCommerce(d: CommerceDeps) {
@@ -120,7 +151,8 @@ export function registerCommerce(d: CommerceDeps) {
 
   // ------------------------------------------------------------ helpers ---
 
-  const isPro = (u: UserRow | undefined, now = Date.now()) => !!u && u.pro_until > now;
+  // Platform gratis: semua orang dianggap PRO (alur langganan disimpan, tidak dihapus).
+  const isPro = (u: UserRow | undefined, now = Date.now()) => !!u && (d.freePlatform || u.pro_until > now);
   const proStatus = (u: UserRow): ProStatus => ({ active: isPro(u), proUntil: u.pro_until, price: PRO_PRICE });
 
   function requirePro(u: UserRow) {
@@ -171,9 +203,9 @@ export function registerCommerce(d: CommerceDeps) {
   /** Aksi yang sah untuk pelaku pada saat ini (tabel + aturan waktu). */
   function availableActions(actor: Actor, r: Row, now = Date.now()): DealAction[] {
     const status = r.status as DealStatus;
-    return (Object.keys(TRANSITIONS[actor][status] ?? {}) as DealAction[]).filter((a) => {
+    return (Object.keys(tableFor(r)[actor][status] ?? {}) as DealAction[]).filter((a) => {
       // Pembeli baru boleh menarik dana sendiri bila penjual melewati batas kirim.
-      if (actor === "buyer" && status === "HELD" && a === "refund") return now >= (r.paid_at as number) + t.shipWindowMs;
+      if (!r.direct && actor === "buyer" && status === "HELD" && a === "refund") return now >= (r.paid_at as number) + t.shipWindowMs;
       return true;
     });
   }
@@ -187,6 +219,7 @@ export function registerCommerce(d: CommerceDeps) {
     const shippedAt = (r.shipped_at as number | null) ?? null;
     const paidAt = (r.paid_at as number | null) ?? null;
     const disputedAt = (r.disputed_at as number | null) ?? null;
+    const direct = !!r.direct;
     return {
       id: r.id as string,
       buyerId: r.buyer_id as string,
@@ -204,9 +237,14 @@ export function registerCommerce(d: CommerceDeps) {
       shippedAt,
       closedAt: (r.closed_at as number | null) ?? null,
       autoReleaseAt: status === "SHIPPED" && shippedAt ? shippedAt + t.autoReleaseMs : null,
-      shipBy: status === "HELD" && paidAt ? paidAt + t.shipWindowMs : null,
-      autoRefundAt:
-        status === "HELD" && paidAt ? paidAt + t.heldRefundMs : status === "DISPUTED" && disputedAt ? disputedAt + t.disputeTimeoutMs : null,
+      shipBy: !direct && status === "HELD" && paidAt ? paidAt + t.shipWindowMs : null,
+      autoRefundAt: direct
+        ? null
+        : status === "HELD" && paidAt
+          ? paidAt + t.heldRefundMs
+          : status === "DISPUTED" && disputedAt
+            ? disputedAt + t.disputeTimeoutMs
+            : null,
       actions: availableActions(role, r, now),
       shipment: d.sealed.view(r.shipment_object as string | null, viewer),
       statements,
@@ -220,6 +258,8 @@ export function registerCommerce(d: CommerceDeps) {
         : null,
       payRef: (r.pay_ref as string | null) ?? "",
       paymentUrl: status === "AWAITING_PAYMENT" ? ((r.payment_url as string | null) ?? null) : null,
+      direct,
+      payment: d.sealed.view(r.payment_object as string | null, viewer),
       receipt: (() => {
         const l = latestReceipt(r.id as string);
         return l ? ({ body: l.body, sig: l.sig } satisfies SignedReceipt) : null;
@@ -284,7 +324,7 @@ export function registerCommerce(d: CommerceDeps) {
       const r = getDeal(dealId);
       if (!r) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
       const from = r.status as DealStatus;
-      const to = TRANSITIONS[actor][from]?.[action];
+      const to = tableFor(r)[actor][from]?.[action];
       if (!to || !availableActions(actor, r, now).includes(action)) {
         const early = actor === "buyer" && from === "HELD" && action === "refund";
         throw new HttpError(409, "bad_transition", early ? "Penjual masih dalam batas waktu pengiriman. Tarik dana bisa dilakukan setelah batas itu lewat." : "Aksi ini tidak bisa dilakukan pada status kesepakatan sekarang");
@@ -302,9 +342,12 @@ export function registerCommerce(d: CommerceDeps) {
       const p = r.price as number;
       const fee = r.fee as number;
       const ref = `${action}:${dealId}`;
-      if (action === "pay") post(ref, "deal_payment", dealId, [[`external:${r.buyer_id}`, -p], ["escrow", p]], now);
-      if (action === "confirm") post(ref, "deal_release", dealId, [["escrow", -p], [`user:${r.seller_id}`, p - fee], ["platform", fee]], now);
-      if (action === "refund") post(ref, "deal_refund", dealId, [["escrow", -p], [`external:${r.buyer_id}`, p]], now);
+      // Kesepakatan langsung: uang tidak pernah lewat KAMBE → tidak ada posting buku besar sama sekali.
+      if (!r.direct) {
+        if (action === "pay") post(ref, "deal_payment", dealId, [[`external:${r.buyer_id}`, -p], ["escrow", p]], now);
+        if (action === "confirm") post(ref, "deal_release", dealId, [["escrow", -p], [`user:${r.seller_id}`, p - fee], ["platform", fee]], now);
+        if (action === "refund") post(ref, "deal_refund", dealId, [["escrow", -p], [`external:${r.buyer_id}`, p]], now);
+      }
       issueReceipt(dealId, now);
       return getDeal(dealId)!;
     });
@@ -312,11 +355,11 @@ export function registerCommerce(d: CommerceDeps) {
 
   // ---------------------------------------------- konfigurasi & kuitansi ---
 
-  route("GET", "/api/config", () => ({ feePerMille: d.feePerMille, notaryPublicKey: d.notary.publicKey, paymentProvider: d.payments.name } satisfies PublicConfig));
+  route("GET", "/api/config", () => ({ feePerMille: d.feePerMille, notaryPublicKey: d.notary.publicKey, paymentProvider: d.payments.name, freePlatform: d.freePlatform } satisfies PublicConfig));
 
   // Webhook gateway: TANPA sesi & tanpa Origin (dikirim server gateway) — keasliannya dibuktikan token.
   route("POST", "/api/payments/webhook/:provider", async ({ req, params }) => {
-    if (params.provider !== d.payments.name || d.payments.name === "simulasi") throw new HttpError(404, "not_found", "Endpoint tidak ditemukan");
+    if (params.provider !== d.payments.name || d.payments.name === "simulasi" || d.payments.name === "langsung") throw new HttpError(404, "not_found", "Endpoint tidak ditemukan");
     const ev = d.payments.parseWebhook(req.headers, await d.readRaw(req, 64 * 1024));
     if (!ev) throw new HttpError(403, "bad_webhook", "Webhook tidak sah");
     const r = db.prepare("SELECT * FROM deals WHERE pay_ref = ?").get(ev.payRef) as Row | undefined;
@@ -348,6 +391,7 @@ export function registerCommerce(d: CommerceDeps) {
   route("GET", "/api/pro", authed(({ user }) => proStatus(user)));
 
   route("POST", "/api/pro/subscribe", authed(async ({ req, user }) => {
+    if (d.freePlatform) throw new HttpError(409, "platform_free", "KAMBE gratis sepenuhnya — tidak perlu berlangganan.");
     // Langganan belum punya alur pembayaran nyata: aktivasi hanya boleh di simulasi lokal.
     // Di produksi atau dengan gateway sungguhan, tanpa pembayaran terkonfirmasi tidak ada PRO.
     if (process.env.NODE_ENV === "production" || d.payments.name !== "simulasi") {
@@ -465,10 +509,12 @@ export function registerCommerce(d: CommerceDeps) {
       const open = db.prepare("SELECT COUNT(*) AS n FROM deals WHERE (buyer_id = ? OR seller_id = ?) AND status = 'AWAITING_PAYMENT'").get(createdBy, createdBy) as { n: number };
       if (open.n >= 30) throw new HttpError(429, "too_many_open", "Terlalu banyak kesepakatan menunggu pembayaran. Selesaikan/batalkan sebagian dulu.");
       const id = randomUUID();
+      // Mode dibekukan per kesepakatan saat dibuat: mengganti penyedia tidak mengubah kesepakatan lama.
+      const direct = d.payments.name === "langsung";
       db.prepare(
-        `INSERT INTO deals (id, buyer_id, seller_id, created_by, product_id, title, price, fee, status, idem_key, created_at, updated_at, pay_ref)
-         VALUES (?, ?, ?, ?, ?, '', ?, ?, 'AWAITING_PAYMENT', ?, ?, ?, ?)`,
-      ).run(id, fields.buyer, fields.seller, createdBy, fields.productId, fields.price, platformFee(fields.price, d.feePerMille), fields.key, now, now, newPayRef());
+        `INSERT INTO deals (id, buyer_id, seller_id, created_by, product_id, title, price, fee, status, idem_key, created_at, updated_at, pay_ref, direct)
+         VALUES (?, ?, ?, ?, ?, '', ?, ?, 'AWAITING_PAYMENT', ?, ?, ?, ?, ?)`,
+      ).run(id, fields.buyer, fields.seller, createdBy, fields.productId, fields.price, direct ? 0 : platformFee(fields.price, d.feePerMille), fields.key, now, now, newPayRef(), direct ? 1 : 0);
       // Judul kesepakatan: sealed object untuk pembeli, penjual & moderator (konteks = kesepakatan ini).
       const contentId = d.sealed.store(fields.content, "deal", fields.creator, id);
       db.prepare("UPDATE deals SET content_object = ? WHERE id = ?").run(contentId, id);
@@ -576,7 +622,7 @@ export function registerCommerce(d: CommerceDeps) {
 
     // Mode gateway: "bayar" = buat invoice di server (kunci rahasia tetap di server) lalu kirim URL bayar.
     // Status baru berubah menjadi HELD saat webhook lunas diterima & diverifikasi.
-    if (action === "pay" && d.payments.name !== "simulasi") {
+    if (action === "pay" && !r.direct && d.payments.name === "xendit") {
       if (r.payment_url) return toDeal(r, user.id); // invoice masih berlaku → jangan buat ganda
       const seller = d.getUser(r.seller_id as string);
       let started;
@@ -610,13 +656,19 @@ export function registerCommerce(d: CommerceDeps) {
     // Bukti kirim ("ship") & cerita sengketa ("dispute") WAJIB, sebagai sealed object untuk pembeli,
     // penjual & moderator. Isi (kurir, resi, alasan, cerita) divalidasi di perangkat; server hanya
     // memastikan objeknya ada, sah, dan ditujukan ke pihak yang berhak.
-    const body = action === "ship" || action === "dispute" ? await d.readJson(req, 256 * 1024) : null;
+    const directPay = action === "pay" && !!r.direct;
+    const body = action === "ship" || action === "dispute" || directPay ? await d.readJson(req, 256 * 1024) : null;
     if (body) rejectPlaintext(body, "courier", "tracking", "note", "reason", "text");
     const now = Date.now();
     const updated = tx(db, () => {
       if (action === "ship") {
         const shipmentId = d.sealed.store(body!.sealed, "shipment", user, r.id as string);
         return transition(params.id, role, action, now, { shipment_object: shipmentId });
+      }
+      if (directPay) {
+        // Bukti/catatan transfer OPSIONAL (biar praktis), tapi bila ada wajib tersegel untuk pihak terkait.
+        const paymentId = body?.sealed ? d.sealed.store(body.sealed, "payment", user, r.id as string) : null;
+        return transition(params.id, role, action, now, paymentId ? { payment_object: paymentId } : {});
       }
       if (action === "dispute") {
         const objectId = d.sealed.store(body!.sealed, "statement", user, r.id as string);
@@ -696,8 +748,8 @@ export function registerCommerce(d: CommerceDeps) {
     const held = HELD_STATUSES.map(() => "?").join(",");
     return {
       balance: sum("SELECT SUM(amount) AS s FROM ledger WHERE account = ?", `user:${user.id}`),
-      incomingHeld: sum(`SELECT SUM(price - fee) AS s FROM deals WHERE seller_id = ? AND status IN (${held})`, user.id, ...HELD_STATUSES),
-      outgoingHeld: sum(`SELECT SUM(price) AS s FROM deals WHERE buyer_id = ? AND status IN (${held})`, user.id, ...HELD_STATUSES),
+      incomingHeld: sum(`SELECT SUM(price - fee) AS s FROM deals WHERE seller_id = ? AND direct = 0 AND status IN (${held})`, user.id, ...HELD_STATUSES),
+      outgoingHeld: sum(`SELECT SUM(price) AS s FROM deals WHERE buyer_id = ? AND direct = 0 AND status IN (${held})`, user.id, ...HELD_STATUSES),
       entries: (
         db
           .prepare("SELECT id, amount, kind, deal_id, created_at FROM ledger WHERE account IN (?, ?) ORDER BY id DESC LIMIT 50")
@@ -717,11 +769,12 @@ export function registerCommerce(d: CommerceDeps) {
       ...(db.prepare("SELECT id FROM deals WHERE status = 'SHIPPED' AND shipped_at <= ?").all(now - t.autoReleaseMs) as { id: string }[]).map(
         (r): [string, DealAction] => [r.id, "confirm"],
       ),
-      ...(db.prepare("SELECT id FROM deals WHERE status = 'HELD' AND paid_at <= ?").all(now - t.heldRefundMs) as { id: string }[]).map(
+      ...(db.prepare("SELECT id FROM deals WHERE status = 'HELD' AND direct = 0 AND paid_at <= ?").all(now - t.heldRefundMs) as { id: string }[]).map(
         (r): [string, DealAction] => [r.id, "refund"],
       ),
     ];
-    const expiredDisputes = db.prepare("SELECT id FROM deals WHERE status = 'DISPUTED' AND disputed_at <= ?").all(now - t.disputeTimeoutMs) as { id: string }[];
+    // Sengketa kesepakatan langsung tidak kedaluwarsa jadi "refund" (tidak ada dana yang ditahan) — menunggu moderator.
+    const expiredDisputes = db.prepare("SELECT id FROM deals WHERE status = 'DISPUTED' AND direct = 0 AND disputed_at <= ?").all(now - t.disputeTimeoutMs) as { id: string }[];
     const out = { released: 0, refunded: 0 };
     for (const { id } of expiredDisputes) {
       try {
@@ -752,7 +805,7 @@ export function registerCommerce(d: CommerceDeps) {
   function audit() {
     const total = (db.prepare("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger").get() as { s: number }).s;
     const escrow = (db.prepare("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE account = 'escrow'").get() as { s: number }).s;
-    const held = (db.prepare(`SELECT COALESCE(SUM(price), 0) AS s FROM deals WHERE status IN ('HELD','SHIPPED','DISPUTED')`).get() as { s: number }).s;
+    const held = (db.prepare(`SELECT COALESCE(SUM(price), 0) AS s FROM deals WHERE direct = 0 AND status IN ('HELD','SHIPPED','DISPUTED')`).get() as { s: number }).s;
     const platform = (db.prepare("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE account = 'platform'").get() as { s: number }).s;
     return { total, escrow, held, platform, balanced: total === 0 && escrow === held };
   }

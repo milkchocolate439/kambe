@@ -12,6 +12,7 @@ import {
   type DealAction,
   type DealStatus,
   type DealContent,
+  type PaymentProofContent,
   type Product,
   type ProductContent,
 } from "../../../shared/protocol.ts";
@@ -20,6 +21,7 @@ import { ApiError } from "../lib/api.ts";
 import { Modal, SealedText, timeOf, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 import { DisputeModal, DisputeThread, ResolutionNote, ShipmentInfo, ShipModal } from "./Disputes.tsx";
+import { PayMethodsManager, PayProofModal, SendPayInfoModal } from "./Payments.tsx";
 
 export const rupiah = (n: number) => "Rp" + n.toLocaleString("id-ID");
 /** Pratinjau fee dengan tarif dari server (0 = escrow gratis). Server tetap yang menghitung fee sebenarnya. */
@@ -27,6 +29,8 @@ const feeOf = (price: number, perMille: number | undefined) => platformFee(price
 const newKey = () => crypto.randomUUID().replace(/-/g, "");
 
 export function SimBadge() {
+  const [s] = useMessenger();
+  if (s.config && s.config.paymentProvider !== "simulasi") return null;
   return (
     <span className="badge warn" title="Tidak ada uang sungguhan yang berpindah">
       SIMULASI
@@ -88,7 +92,37 @@ const STATUS: Record<DealStatus, { label: string; tone: "ok" | "warn" | "danger"
   DISPUTED: { label: "Sengketa", tone: "danger" },
 };
 
-const ACTIONS: Record<DealAction, { label: string; primary?: boolean; danger?: boolean; confirm?: (d: Deal) => string }> = {
+/** Kesepakatan LANGSUNG: KAMBE tidak memegang dana, jadi label menggambarkan apa yang dinyatakan para pihak. */
+const DIRECT_STATUS: Record<DealStatus, { label: string; tone: "ok" | "warn" | "danger" | "muted" }> = {
+  AWAITING_PAYMENT: { label: "Menunggu transfer", tone: "warn" },
+  HELD: { label: "Pembeli sudah transfer · cek mutasi", tone: "warn" },
+  SHIPPED: { label: "Uang diterima · dikirim", tone: "ok" },
+  COMPLETED: { label: "Selesai", tone: "ok" },
+  CANCELLED: { label: "Dibatalkan", tone: "muted" },
+  REFUNDED: { label: "Dana dikembalikan penjual", tone: "muted" },
+  DISPUTED: { label: "Sengketa", tone: "danger" },
+};
+
+type ActionMeta = { label: string; primary?: boolean; danger?: boolean; confirm?: (d: Deal) => string };
+
+function directMeta(a: DealAction, buyer: boolean): ActionMeta {
+  switch (a) {
+    case "pay":
+      return { label: "Sudah transfer", primary: true };
+    case "ship":
+      return { label: "Uang diterima · kirim", primary: true };
+    case "confirm":
+      return { label: "Barang diterima · selesai", primary: true, confirm: () => "Kesepakatan ditandai selesai. Lakukan hanya bila barang/jasa benar-benar sudah kamu terima." };
+    case "refund":
+      return { label: "Dana sudah kukembalikan", danger: true, confirm: (d) => `Tandai bahwa kamu sudah mengembalikan ${rupiah(d.price)} ke pembeli. Kesepakatan ditutup.` };
+    case "dispute":
+      return { label: buyer ? "Ajukan sengketa" : "Uang belum masuk", danger: true };
+    default:
+      return { label: "Batalkan" };
+  }
+}
+
+const ACTIONS: Record<DealAction, ActionMeta> = {
   pay: {
     label: "Bayar ke rekber",
     primary: true,
@@ -122,14 +156,18 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
   const [s, m] = useMessenger();
   const [pending, setPending] = useState<DealAction | null>(null);
   const [identity, setIdentity] = useState(false);
-  const [form, setForm] = useState<null | "ship" | "dispute">(null);
+  const [form, setForm] = useState<null | "ship" | "dispute" | "pay">(null);
+  const [payInfo, setPayInfo] = useState(false);
   const { busy, error, run } = useAction();
   const iAmBuyer = deal.buyerId === s.me.id;
-  const st = STATUS[deal.status];
+  const direct = deal.direct;
+  const st = (direct ? DIRECT_STATUS : STATUS)[deal.status];
   const when = (ts: number) => `${new Date(ts).toLocaleDateString("id-ID", { day: "numeric", month: "short" })} ${timeOf(ts)}`;
   // Pembeli yang menarik dana sendiri (penjual lewat batas kirim) diberi label & penjelasan berbeda.
-  const meta = (a: DealAction) =>
-    a === "refund" && iAmBuyer
+  const meta = (a: DealAction): ActionMeta =>
+    direct
+      ? directMeta(a, iAmBuyer)
+      : a === "refund" && iAmBuyer
       ? { label: "Tarik dana kembali", danger: true, confirm: (x: Deal) => `Penjual tidak mengirim sebelum batas waktu. ${rupiah(x.price)} dikembalikan penuh kepadamu dan kesepakatan dibatalkan.` }
       : ACTIONS[a];
   const canShareIdentity = ["HELD", "SHIPPED", "COMPLETED", "DISPUTED"].includes(deal.status);
@@ -143,7 +181,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
     <div className="deal-card">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <span className="row tiny" style={{ gap: 6, fontWeight: 800, letterSpacing: "0.06em" }}>
-          <Icon name="handshake" size={14} /> KESEPAKATAN REKBER
+          <Icon name="handshake" size={14} /> {direct ? "KESEPAKATAN LANGSUNG" : "KESEPAKATAN REKBER"}
         </span>
         <SimBadge />
       </div>
@@ -155,14 +193,25 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         <span>{peerAlias}</span>
         <span className="muted">Harga</span>
         <span className="mono">{rupiah(deal.price)}</span>
-        <span className="muted">{deal.fee > 0 ? `Fee platform (${((deal.fee / deal.price) * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 })}%)` : "Biaya escrow KAMBE"}</span>
-        <span className="mono">{deal.fee > 0 ? `−${rupiah(deal.fee)}` : "Gratis"}</span>
-        <span className="muted">Diterima penjual</span>
-        <span className="mono">{rupiah(deal.sellerNet)}</span>
+        {direct ? (
+          <>
+            <span className="muted">Pembayaran</span>
+            <span>Langsung ke penjual</span>
+            <span className="muted">Biaya KAMBE</span>
+            <span>Gratis</span>
+          </>
+        ) : (
+          <>
+            <span className="muted">{deal.fee > 0 ? `Fee platform (${((deal.fee / deal.price) * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 })}%)` : "Biaya escrow KAMBE"}</span>
+            <span className="mono">{deal.fee > 0 ? `−${rupiah(deal.fee)}` : "Gratis"}</span>
+            <span className="muted">Diterima penjual</span>
+            <span className="mono">{rupiah(deal.sellerNet)}</span>
+          </>
+        )}
       </div>
       <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
         <span className={`badge ${st.tone === "muted" ? "" : st.tone}`}>{st.label}</span>
-        {deal.autoReleaseAt && <span className="tiny muted">Cair otomatis {when(deal.autoReleaseAt)}</span>}
+        {deal.autoReleaseAt && <span className="tiny muted">{direct ? "Selesai otomatis" : "Cair otomatis"} {when(deal.autoReleaseAt)}</span>}
       </div>
       {deal.status === "HELD" && deal.shipBy && (
         <div className="tiny muted">
@@ -178,6 +227,22 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
       )}
       <ReceiptLine deal={deal} />
       <TxLine deal={deal} peerAlias={peerAlias} />
+      {direct && iAmBuyer && deal.status === "AWAITING_PAYMENT" && (
+        <div className="tiny muted">Transfer ke info pembayaran yang dikirim {peerAlias} di chat, lalu tekan "Sudah transfer". KAMBE tidak memegang dana.</div>
+      )}
+      {direct && !iAmBuyer && deal.status === "HELD" && (
+        <div className="tiny muted">Cek mutasi rekening/dompetmu. Kalau uang sudah masuk, tekan "Uang diterima · kirim". Kalau belum, tekan "Uang belum masuk".</div>
+      )}
+      {direct && deal.payment && (
+        <div className="tiny">
+          <Icon name="wallet" size={12} /> Catatan transfer: <SealedText<PaymentProofContent> view={deal.payment} field="note" max={300} locked="🔒 terenkripsi" />
+        </div>
+      )}
+      {direct && !iAmBuyer && (deal.status === "AWAITING_PAYMENT" || deal.status === "HELD") && (
+        <button className="btn small" onClick={() => setPayInfo(true)}>
+          <Icon name="wallet" size={14} /> Kirim info pembayaran
+        </button>
+      )}
       {deal.paymentUrl?.startsWith("https://") && iAmBuyer && (
         <a className="btn primary small" href={deal.paymentUrl} target="_blank" rel="noopener noreferrer">
           Lanjutkan ke halaman bayar resmi
@@ -188,7 +253,11 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
       <DisputeThread deal={deal} peer={peer} myRole={iAmBuyer ? "buyer" : "seller"} />
       {deal.status === "DISPUTED" && (
         <div className="tiny" style={{ color: "var(--danger)" }}>
-          {iAmBuyer ? "Kamu mengajukan sengketa. Diskusikan dengan penjual; dana tetap ditahan." : "Pembeli mengajukan sengketa. Dana ditahan sampai kamu mengembalikan dana atau pembeli menerima barang."}
+          {direct
+            ? "Sengketa berjalan. KAMBE tidak memegang dana — moderator menilai bukti kedua pihak (catatan transfer, resi, pernyataan)."
+            : iAmBuyer
+              ? "Kamu mengajukan sengketa. Diskusikan dengan penjual; dana tetap ditahan."
+              : "Pembeli mengajukan sengketa. Dana ditahan sampai kamu mengembalikan dana atau pembeli menerima barang."}
           {deal.autoRefundAt && ` Bila belum selesai sampai ${when(deal.autoRefundAt)}, dana kembali ke pembeli.`}
         </div>
       )}
@@ -201,7 +270,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
                 key={a}
                 className={`btn small ${"primary" in x && x.primary ? "primary" : ""} ${x.danger ? "danger" : ""}`}
                 disabled={busy}
-                onClick={() => (a === "ship" || a === "dispute" ? setForm(a) : x.confirm ? setPending(a) : void act(a))}
+                onClick={() => (direct && a === "pay" ? setForm("pay") : a === "ship" || a === "dispute" ? setForm(a) : x.confirm ? setPending(a) : void act(a))}
               >
                 {x.label}
               </button>
@@ -239,6 +308,8 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
       {identity && <IdentityModal peer={peer} peerAlias={peerAlias} onClose={() => setIdentity(false)} />}
       {form === "ship" && <ShipModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
       {form === "dispute" && <DisputeModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
+      {form === "pay" && <PayProofModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
+      {payInfo && <SendPayInfoModal peer={peer} peerAlias={peerAlias} onClose={() => setPayInfo(false)} />}
     </div>
   );
 }
@@ -305,8 +376,9 @@ function TxLine({ deal, peerAlias }: { deal: Deal; peerAlias: string }) {
   }
   return (
     <span className="tiny row" style={{ gap: 6, color: t.peer === "ok" ? "var(--arwah)" : "var(--muted)", flexWrap: "wrap" }} title="Buku Jejak Transaksi: setiap perubahan status dicatat & ditandatangani perangkat kedua pihak">
-      <Icon name={t.peer === "ok" ? "shieldCheck" : "clock"} size={12} />
-      {t.peer === "ok" ? `Buku Jejak: 3 tanda tangan cocok (notaris + kamu + ${peerAlias})` : `Buku Jejak: notaris + kamu · menunggu ${peerAlias}`}
+      <span>
+        <Icon name={t.peer === "ok" ? "shieldCheck" : "clock"} size={12} /> {t.peer === "ok" ? `Buku Jejak: 3 tanda tangan cocok (notaris + kamu + ${peerAlias})` : `Buku Jejak: notaris + kamu · menunggu ${peerAlias}`}
+      </span>
       <button className="btn ghost small" onClick={() => void save()} aria-label="Ekspor bukti transaksi">
         Ekspor bukti
       </button>
@@ -439,7 +511,9 @@ export function OfferModal({ peer, peerAlias, onClose }: { peer: string; peerAli
               <span className="error">{problem}</span>
             ) : (
               <span className="hint">
-                {feeOf(price, perMille) > 0
+                {s.config?.paymentProvider === "langsung"
+                  ? `Pembeli mentransfer ${rupiah(price)} langsung ke info pembayaranmu — KAMBE gratis & tidak memegang dana.`
+                  : feeOf(price, perMille) > 0
                   ? `Kamu menerima ${rupiah(price - feeOf(price, perMille))} setelah fee platform (${rupiah(feeOf(price, perMille))}).`
                   : `Kamu menerima ${rupiah(price)} utuh — escrow KAMBE gratis.`}
               </span>
@@ -557,34 +631,31 @@ const LEDGER_LABEL: Record<string, string> = {
 
 export function StoreModal({ onClose, initial = "pro" }: { onClose: () => void; initial?: StoreTab }) {
   const [s, m] = useMessenger();
-  const [tab, setTab] = useState<StoreTab>(s.pro?.active && initial === "pro" ? "products" : initial);
+  const free = !!s.config?.freePlatform;
+  const direct = s.config?.paymentProvider === "langsung";
+  const [tab, setTab] = useState<StoreTab>((s.pro?.active || free) && initial === "pro" ? "products" : initial);
   useEffect(() => {
-    if (tab === "wallet") void m.loadWallet();
-  }, [m, tab]);
+    if (tab === "wallet" && !direct) void m.loadWallet();
+  }, [m, tab, direct]);
+  const tabs: [StoreTab, string][] = free ? [["products", "Etalase"], ["wallet", "Dompet"]] : [["pro", "PRO"], ["products", "Etalase"], ["wallet", "Dompet"]];
 
   return (
     <Modal title="Toko & Dompet" onClose={onClose}>
       <div className="stack">
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="small muted">Fitur dagang masih tahap uji — tidak ada uang sungguhan.</span>
+          <span className="small muted">{direct ? "KAMBE gratis. Pembayaran langsung antarpengguna — KAMBE tidak memegang dana." : "Fitur dagang masih tahap uji — tidak ada uang sungguhan."}</span>
           <SimBadge />
         </div>
-        <div className="tabs" role="tablist">
-          {(
-            [
-              ["pro", "PRO"],
-              ["products", "Etalase"],
-              ["wallet", "Dompet"],
-            ] as const
-          ).map(([t, label]) => (
+        <div className="tabs" role="tablist" style={{ gridTemplateColumns: `repeat(${tabs.length}, 1fr)` }}>
+          {tabs.map(([t, label]) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
               {label}
             </button>
           ))}
         </div>
         {tab === "pro" && <ProTab />}
-        {tab === "products" && (s.pro?.active ? <ProductsTab /> : <ProTab />)}
-        {tab === "wallet" && <WalletTab />}
+        {tab === "products" && (s.pro?.active || free ? <ProductsTab /> : <ProTab />)}
+        {tab === "wallet" && (direct ? <PayMethodsManager /> : <WalletTab />)}
       </div>
     </Modal>
   );

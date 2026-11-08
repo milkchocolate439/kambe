@@ -104,3 +104,16 @@ atau Fase B (biaya TURN).
 - Rekber untuk penjual non-PRO lewat Etalase Hantu (sekarang tetap butuh PRO).
 - Kabar 24 Jam per sektor (Berita Intel) — butuh kebijakan moderasi.
 - Fase B: WebRTC relay-only + Jabat Tangan QR. Fase C: grup E2EE, lampiran foto, panggilan.
+
+## Revisi 2 (9 Nov 2026): gratis sepenuhnya + kesepakatan langsung
+
+Keputusan pemilik: "Simpan dulu alur PRO, jadikan platform gratis sepenuhnya. Transaksi antarpengguna memakai rekening yang
+dibagikan antarpengguna, dengan pemblokiran berbagi nomor HP dan sejenisnya; disarankan memakai dompet kripto. Semua kegiatan
+harus praktis dan simpel." Jawaban atas pertanyaan terbuka memakai pilihan paling sederhana: moderator tetap ada (menilai bukti,
+tidak memindahkan uang); kripto cukup alamat + aset/jaringan teks bebas.
+
+- PRO & rekber **disimpan** (dorman, tetap teruji) — bukan dihapus.
+- Default server: `KAMBE_PAYMENT_PROVIDER=langsung`, `KAMBE_FREE_PLATFORM=1`.
+- Alur: kirim info bayar → Sudah transfer (+catatan) → Uang diterima · kirim / Uang belum masuk → Barang diterima · selesai.
+- E-wallet tidak didukung karena nomor akunnya adalah nomor HP.
+- Detail: `docs/ARSITEKTUR.md` §8. Tes: `tests/direct.test.ts`, `tests/contactguard.test.ts`, `tests/browser/direct-e2e.ts`.

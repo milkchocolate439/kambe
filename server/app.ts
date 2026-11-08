@@ -63,8 +63,10 @@ export interface AppOptions {
   notaryKey?: KeyObject;
   /** Fee platform per seribu (default 50 = 5%; maks. 200 = 20%). */
   feePerMille?: number;
-  /** Penyedia pembayaran. Default: simulasi (tanpa uang sungguhan). */
+  /** Penyedia pembayaran. Default: simulasi (tanpa uang sungguhan). Server produk memakai "langsung" (lihat index.ts). */
   payments?: PaymentProvider;
+  /** Platform gratis sepenuhnya (semua fitur PRO terbuka). Default false di createApp; index.ts menyalakannya. */
+  freePlatform?: boolean;
   log?: (msg: string) => void;
   /** Jeda bertahap login per alias (tes memakai nilai kecil). Default: 2 dtk, naik 2x lipat, maks. 5 menit. */
   loginBackoff?: { baseMs?: number; maxMs?: number };
@@ -926,6 +928,7 @@ export function createApp(opts: AppOptions) {
     notary,
     feePerMille,
     payments: opts.payments ?? simulatedProvider,
+    freePlatform: opts.freePlatform ?? false,
     readRaw,
     log,
     sealed,

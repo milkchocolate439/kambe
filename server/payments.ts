@@ -29,11 +29,25 @@ export interface WebhookEvent {
 }
 
 export interface PaymentProvider {
-  readonly name: "simulasi" | "xendit";
+  readonly name: "simulasi" | "xendit" | "langsung";
   start(req: PaymentRequest): Promise<PaymentStart>;
   /** Verifikasi & urai webhook. null = tidak sah (abaikan, jangan bocorkan alasan). */
   parseWebhook(headers: IncomingHttpHeaders, rawBody: string): WebhookEvent | null;
 }
+
+/**
+ * LANGSUNG (default produk): pembeli mentransfer sendiri ke rekening/dompet yang dibagikan penjual lewat
+ * E2EE. KAMBE tidak memegang dana, tidak membuat invoice, dan tidak menerima webhook.
+ */
+export const directProvider: PaymentProvider = {
+  name: "langsung",
+  async start() {
+    throw new Error("direct_mode");
+  },
+  parseWebhook() {
+    return null;
+  },
+};
 
 /** Simulasi: pembayaran dianggap lunas seketika. Tidak ada uang sungguhan yang berpindah. */
 export const simulatedProvider: PaymentProvider = {

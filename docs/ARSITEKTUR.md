@@ -39,7 +39,7 @@ kepatuhan hukum Indonesia → kenyamanan → kesederhanaan.
 | Sinkronisasi ulang saat ponsel hidup | **Diadopsi** | Antrean kirim (outbox) + pengambilan pesan tertunda saat tersambung lagi (sudah ada sejak Fase 1). |
 | Ponsel sebagai server P2P penuh (WebRTC/libp2p) | **Disesuaikan** | Ponsel berada di balik NAT/CGNAT operator dan dibatasi OS saat di latar belakang; tetap perlu relay. Relay hanya melihat ciphertext, jadi tujuan privasinya tercapai. P2P langsung (WebRTC) bisa jadi optimisasi kelak untuk lampiran besar. |
 | Server developer pasif | **Disesuaikan** | Server tetap ada tapi **minim data**: tidak menyimpan isi pesan/momen, tidak menyimpan riwayat, tidak menyimpan identitas asli. Logika uang tetap di server karena uang harus dikendalikan pihak tepercaya (lihat §4). |
-| **Skema A — smart contract/crypto** | **Ditolak** | Crypto dilarang sebagai alat pembayaran di Indonesia (UU 7/2011 tentang Mata Uang, ketentuan BI). Transaksi on-chain juga permanen & publik — bertentangan dengan privasi. |
+| **Skema A — smart contract/crypto** | **Diubah (keputusan pemilik 9 Nov 2026): dompet kripto *disarankan* sebagai tujuan transfer antarpengguna** | KAMBE tidak memegang, memproses, atau menukar kripto: penjual hanya membagikan alamat dompetnya lewat E2EE (non-kustodial). Catatan hukum tetap berlaku: aset kripto **bukan alat pembayaran sah** di Indonesia (UU 7/2011, ketentuan BI) — kebijakan ini perlu tinjauan hukum sebelum rilis publik. Smart contract/escrow on-chain tetap tidak dipakai. |
 | **Skema B — payment gateway split** | **Diadopsi (cara aman)** | Lihat §4. Kunci rahasia gateway **hanya di server**; ponsel hanya membuka halaman/QR bayar. Split penjual/fee dilakukan gateway (mis. xenPlatform). |
 | **Skema C — kredit yang bisa ditukar uang** | **Ditolak untuk sekarang** | Nilai tersimpan yang bisa diuangkan = uang elektronik → wajib izin BI. Kredit tertutup (tidak bisa diuangkan) bisa dipertimbangkan kelak. |
 | "Tanda tangan dengan Developer **Public** Key" | **Diperbaiki** | Tanda tangan butuh **kunci privat** — kunci itu disimpan di server (notaris), *tidak pernah* di ponsel. Ponsel memverifikasi dengan kunci publik notaris. |
@@ -183,6 +183,23 @@ dijaga oleh `tests/kambe-compat.test.ts` (memakai data contoh era PINPath di `te
 
 Env juga kompatibel ke belakang: server membaca `KAMBE_<NAMA>` lebih dulu, lalu `PINPATH_<NAMA>`
 (`server/env.ts`). Tanpa `KAMBE_DB`, server memakai `data/pinpath.db` bila sudah ada, selain itu `data/kambe.db`.
+
+## 8. Platform gratis & kesepakatan langsung (revisi 9 Nov 2026)
+
+Keputusan pemilik: KAMBE **gratis sepenuhnya**, transaksi antarpengguna memakai rekening/dompet yang dibagikan antarpengguna
+(kripto disarankan), dan pembagian nomor HP/kontak luar diblokir. Prinsip: **praktis dan simpel**.
+
+| Komponen | Berkas | Catatan |
+|---|---|---|
+| Mode per kesepakatan | `server/commerce.ts` (`deals.direct`, `DIRECT_TRANSITIONS`) | Dibekukan saat dibuat. Mode langsung: tanpa posting buku besar, tanpa escrow, tanpa "tarik dana", tanpa refund otomatis; sengketa tidak kedaluwarsa (menunggu moderator) |
+| Penyedia default | `server/payments.ts` (`directProvider`), `server/index.ts` | `KAMBE_PAYMENT_PROVIDER` default `langsung` (boleh di produksi); `simulasi` ditolak di produksi |
+| Platform gratis | `KAMBE_FREE_PLATFORM` (default on) | `isPro()` selalu benar; `/api/pro/subscribe` → 409. Kode PRO & rekber disimpan dan tetap diuji (`commerce-e2e` memakai mode lama) |
+| Bukti transfer | sealed kind `payment` (`deals.payment_object`) | Opsional, tersegel untuk pembeli, penjual & moderator |
+| Info pembayaran | `shared/payinfo.ts`, `client/src/ui/Payments.tsx`, payload E2EE `payinfo` | Di brankas perangkat (rahasia `pay-methods`), tidak pernah ke server. E-wallet sengaja tidak didukung (nomor akun = nomor HP) |
+| Pemblokir kontak | `shared/contactguard.ts` | Di perangkat pengirim (sebelum enkripsi) untuk semua teks bebas; di server hanya untuk teks publik (headline Radar); penerima menyamarkan. Bisa dikelabui penulisan kreatif — penghalang praktis, bukan jaminan |
+
+Batas yang jujur: tanpa escrow, KAMBE **tidak bisa mengembalikan dana**. Perlindungan yang tersisa: catatan notaris, Buku Jejak tiga
+tanda tangan, bukti transfer tersegel, peringatan di layar, dan putusan moderator (tanpa memindahkan uang).
 
 ## 7. KAMBE v2: pesan kendali, Etalase Hantu, Buku Jejak
 

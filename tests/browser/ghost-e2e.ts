@@ -94,11 +94,7 @@ async function main() {
     await seller.getByRole("button", { name: "Terima" }).click();
     await buyer.getByRole("button", { name: /Gayo_Penjual/ }).waitFor();
 
-    // Penjual: PRO (agar pesanan bisa jadi tawaran rekber) + pajang barang.
-    await seller.getByRole("button", { name: "Toko & Dompet" }).click();
-    await seller.getByRole("button", { name: "Aktifkan PRO (simulasi)" }).click();
-    await seller.getByText(/Aktif sampai/).waitFor();
-    await seller.keyboard.press("Escape");
+    // Platform gratis: penjual langsung memajang barang, tanpa langganan apa pun.
     await openGhost(seller, /Pembeli_Hantu/);
     await seller.getByRole("tab", { name: /Etalase Saya/ }).click();
     const addBtn = seller.getByRole("button", { name: /Pajang di Etalase Hantu|Isi nama barang|Harga minimal/ });
@@ -139,9 +135,9 @@ async function main() {
     await buyer.keyboard.press("Escape");
     const card = buyer.locator(".deal-card", { hasText: ITEM });
     await card.waitFor();
-    check((await card.textContent())?.includes("Rp125.000") === true, "tawaran rekber otomatis dengan harga dari katalog penjual");
-    check((await card.textContent())?.includes("Gratis") === true, "escrow gratis tampil di tawaran");
-    check(await card.getByRole("button", { name: "Bayar ke rekber" }).isVisible(), "pembeli yang membayar — uang tidak bergerak otomatis");
+    check((await card.textContent())?.includes("Rp125.000") === true, "tawaran otomatis dengan harga dari katalog penjual");
+    check((await card.textContent())?.includes("Langsung ke penjual") === true && (await card.textContent())?.includes("Gratis") === true, "kesepakatan langsung & gratis");
+    check(await card.getByRole("button", { name: "Sudah transfer" }).isVisible(), "pembeli yang mentransfer sendiri — KAMBE tidak memegang dana");
 
     // Pesan kendali tidak tampil sebagai chat & tidak menambah 'belum dibaca'.
     await buyer.waitForTimeout(800);
