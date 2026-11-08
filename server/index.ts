@@ -4,6 +4,7 @@ import { createApp } from "./app.ts";
 import { defaultDbPath, readEnv, staticDirFor } from "./env.ts";
 import { loadNotaryKey, notaryKeyFromSeed } from "./notary.ts";
 import { directProvider, simulatedProvider, xenditProvider, type PaymentProvider } from "./payments.ts";
+import { mongoSnapshotStore, restoreSnapshot, snapshotKey, Snapshotter, type SnapshotStore } from "./snapshot.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const env = process.env;
@@ -38,8 +39,23 @@ function paymentProvider(): PaymentProvider {
 
 const feePerMille = readEnv(env, "FEE_PER_MILLE");
 
+const dbPath = readEnv(env, "DB") ?? defaultDbPath(join(root, "data"));
+
+// Hosting gratis berdisk sementara: database dipulihkan dari & disalin ke MongoDB (terenkripsi).
+const mongoUri = readEnv(env, "MONGODB_URI");
+let snapshotStore: SnapshotStore | null = null;
+let snapKey: Buffer | null = null;
+if (mongoUri) {
+  const secret = readEnv(env, "SNAPSHOT_KEY");
+  if (!secret) throw new Error("KAMBE_MONGODB_URI butuh KAMBE_SNAPSHOT_KEY (minimal 32 karakter acak) untuk mengenkripsi snapshot");
+  snapKey = snapshotKey(secret);
+  snapshotStore = await mongoSnapshotStore(mongoUri, readEnv(env, "MONGODB_DB") ?? "kambe");
+  const outcome = await restoreSnapshot(snapshotStore, snapKey, dbPath);
+  console.log(`[snapshot] pemulihan saat menyala: ${outcome}`);
+}
+
 const app = createApp({
-  dbPath: readEnv(env, "DB") ?? defaultDbPath(join(root, "data")),
+  dbPath,
   staticDir: staticDirFor(env, root),
   secure: readEnv(env, "SECURE") === "1",
   trustProxy: readEnv(env, "TRUST_PROXY") === "1",
@@ -66,8 +82,28 @@ app.server.listen(port, host, () => {
   console.log(`Kunci publik notaris: ${app.notaryPublicKey}`);
 });
 
+const snapshotter =
+  snapshotStore && snapKey
+    ? new Snapshotter({ db: app.db, store: snapshotStore, key: snapKey, intervalMs: Number(readEnv(env, "SNAPSHOT_INTERVAL_S") ?? 30) * 1000, log: (m) => console.error(m) })
+    : null;
+snapshotter?.start();
+
+let stopping = false;
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
-    void app.close().then(() => process.exit(0));
+    if (stopping) return;
+    stopping = true;
+    void (async () => {
+      snapshotter?.stop();
+      // Snapshot terakhir sebelum mati (deploy/restart di hosting gratis) — maksimal 10 detik.
+      if (snapshotter) {
+        await Promise.race([snapshotter.snapshotNow().then((r) => console.log(`[snapshot] terakhir: ${r}`)), new Promise((r) => setTimeout(r, 10_000))]).catch((e) =>
+          console.error(`[snapshot] terakhir gagal: ${(e as Error).message}`),
+        );
+        await snapshotStore?.close?.().catch(() => {});
+      }
+      await app.close();
+      process.exit(0);
+    })();
   });
 }

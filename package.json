@@ -16,6 +16,7 @@
     "test:browser": "node --import tsx tests/browser/e2e.ts && node --import tsx tests/browser/commerce-e2e.ts && node --import tsx tests/browser/discovery-e2e.ts && node --import tsx tests/browser/vault-e2e.ts && node --import tsx tests/browser/audit-e2e.ts && node --import tsx tests/browser/panic-e2e.ts && node --import tsx tests/browser/ghost-e2e.ts && node --import tsx tests/browser/ui-v2-e2e.ts && node --import tsx tests/browser/direct-e2e.ts"
   },
   "dependencies": {
+    "mongodb": "^6.22.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "ws": "^8.18.2"

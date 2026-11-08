@@ -37,6 +37,8 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 | `KAMBE_NOTARY_KEY` / `KAMBE_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
 | `KAMBE_PAYMENT_PROVIDER` | `langsung` | **`langsung`** = pembeli mentransfer sendiri ke info pembayaran penjual, KAMBE tidak memegang dana (boleh di produksi). `simulasi` = rekber tiruan (dev/tes saja). `xendit` = gateway nyata (disimpan; butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `KAMBE_PUBLIC_URL`) |
 | `KAMBE_NOTARY_SEED` | – | Seed rahasia (≥ 32 karakter) untuk kunci notaris deterministik — untuk hosting tanpa disk persisten (dipakai Blueprint Render paket gratis) |
+| `KAMBE_MONGODB_URI` | – | Hosting gratis berdisk sementara (Koyeb dll.): database SQLite dipulihkan dari & disalin ke MongoDB Atlas (GridFS, 3 versi terakhir) tiap `KAMBE_SNAPSHOT_INTERVAL_S` detik (default 30) dan saat SIGTERM |
+| `KAMBE_SNAPSHOT_KEY` | – | Wajib bila `KAMBE_MONGODB_URI` diisi: rahasia ≥ 32 karakter untuk mengenkripsi snapshot (AES-256-GCM) |
 | `KAMBE_FREE_PLATFORM` | `1` | Platform gratis sepenuhnya (semua fitur PRO terbuka, langganan dimatikan). `0` = alur PRO lama |
 | `KAMBE_PUBLIC_URL` | – | Alamat publik aplikasi (tujuan kembali setelah bayar di gateway) |
 | `KAMBE_SERVE_DIST` | – | Khusus uji: `1` + `NODE_ENV=test` = sajikan `dist/` dengan pembayaran simulasi. Di mode lain server menolak start. **Jangan dipakai untuk deployment** (pakai `NODE_ENV=production`) |
