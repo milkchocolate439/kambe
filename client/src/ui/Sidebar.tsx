@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { normalizePin, pinProblem } from "../../../shared/pin.ts";
 import { NOTE_MAX, type LabelContent, type NoteContent, type PmContent } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
@@ -7,14 +7,29 @@ import { Icon } from "./icons.tsx";
 import { Logo, Wordmark } from "./Logo.tsx";
 import { RadarCard, ShadowPinModal } from "./Discovery.tsx";
 
-export function Sidebar() {
+export function Sidebar({ onOpenJejak }: { onOpenJejak: () => void }) {
+  const [s] = useMessenger();
+  // Sudah punya kontak → daftar obrolan di atas (seperti aplikasi chat); pengguna baru → kartu PIN dulu.
+  const chatsFirst = s.contacts.length > 0;
   return (
     <aside className="sidebar" aria-label="Kontak dan PIN Kambe">
-      <MyPinCard />
-      <InviteCard />
-      <RadarCard />
-      <Requests />
-      <Contacts />
+      {chatsFirst ? (
+        <>
+          <Requests />
+          <Contacts onOpenJejak={onOpenJejak} />
+          <MyPinCard />
+          <InviteCard />
+          <RadarCard />
+        </>
+      ) : (
+        <>
+          <MyPinCard />
+          <InviteCard />
+          <RadarCard />
+          <Requests />
+          <Contacts onOpenJejak={onOpenJejak} />
+        </>
+      )}
     </aside>
   );
 }
@@ -141,7 +156,7 @@ function InviteCard() {
   }
 
   return (
-    <section className="card">
+    <section className="card" id="invite-card">
       <div className="or-divider" aria-hidden="true">atau</div>
       <h3>
         <Icon name="userPlus" size={14} /> Hubungkan via PIN
@@ -280,13 +295,89 @@ function Requests() {
   );
 }
 
-function Contacts() {
+type ChatFilter = "all" | "unread" | "verified" | "review";
+
+/** Baris "cerita" Jejak: kontak yang baru menulis di Jejak (cincin api) + tombol tulis sendiri. */
+function StoryRow({ onOpenJejak }: { onOpenJejak: () => void }) {
   const [s, m] = useMessenger();
+  useEffect(() => {
+    if (!s.moments) void m.loadMoments().catch(() => {});
+  }, [m, s.moments]);
+  const authors = useMemo(() => {
+    const seen = new Map<string, { id: string; alias: string; at: number }>();
+    for (const mo of s.moments ?? []) {
+      if (mo.mine) continue;
+      const cur = seen.get(mo.authorId);
+      if (!cur || mo.createdAt > cur.at) seen.set(mo.authorId, { id: mo.authorId, alias: mo.authorAlias, at: mo.createdAt });
+    }
+    return [...seen.values()].sort((a, b) => b.at - a.at).slice(0, 12);
+  }, [s.moments]);
   return (
-    <section className="card grow" style={{ flex: "1 0 auto" }}>
-      <h3>
-        <Icon name="lock" size={14} /> Obrolan terenkripsi <span className="muted" style={{ marginLeft: "auto", textTransform: "none", letterSpacing: 0 }}>{s.contacts.length} kontak</span>
-      </h3>
+    <div className="stories" role="group" aria-label="Cerita terbaru">
+      <button className="story" onClick={onOpenJejak} aria-label="Cerita baru">
+        <span className="story-ring add" aria-hidden="true">
+          <Icon name="plus" size={20} />
+        </span>
+        <span className="story-name" aria-hidden="true">Kamu</span>
+      </button>
+      {authors.map((a, i) => (
+        <button key={a.id} className="story" onClick={onOpenJejak} aria-label={"Cerita ke-" + (i + 1)}>
+          <span className="story-ring live" aria-hidden="true">
+            <Avatar id={a.id} name={a.alias} size={46} />
+          </span>
+          <span className="story-name truncate" aria-hidden="true">{a.alias}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Contacts({ onOpenJejak }: { onOpenJejak: () => void }) {
+  const [s, m] = useMessenger();
+  const [filter, setFilter] = useState<ChatFilter>("all");
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState("");
+  const unread = s.contacts.filter((c) => c.unread > 0).length;
+  const review = s.contacts.filter((c) => s.keyAlerts[c.id]).length;
+  const needle = query.trim().toLowerCase();
+  const shown = s.contacts.filter((c) => {
+    if (needle && !c.alias.toLowerCase().includes(needle)) return false;
+    if (filter === "unread") return c.unread > 0;
+    if (filter === "verified") return !!s.pins[c.id]?.verified && !s.keyAlerts[c.id];
+    if (filter === "review") return !!s.keyAlerts[c.id];
+    return true;
+  });
+  const chips: [ChatFilter, string][] = [["all", "Semua"], ["unread", unread ? "Belum dibaca (" + unread + ")" : "Belum dibaca"], ["verified", "Terverifikasi"]];
+  if (review) chips.push(["review", "Perlu ditinjau (" + review + ")"]);
+
+  return (
+    <section className="chats" aria-label="Obrolan terenkripsi">
+      <div className="chats-head">
+        <h2>Obrolan</h2>
+        <span className="small muted grow">{s.contacts.length} kontak</span>
+        <button className={"btn round glass icon " + (searching ? "on" : "")} aria-label="Cari obrolan" aria-pressed={searching} onClick={() => { setSearching((v) => !v); setQuery(""); }}>
+          <Icon name="search" size={18} />
+        </button>
+        <button
+          className="btn round glass icon hide-mobile"
+          aria-label="Tambah kontak"
+          onClick={() => {
+            document.getElementById("invite-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+            document.querySelector<HTMLInputElement>("#invite-card input")?.focus({ preventScroll: true });
+          }}
+        >
+          <Icon name="userPlus" size={18} />
+        </button>
+      </div>
+      {searching && <input className="input" autoFocus value={query} maxLength={40} onChange={(e) => setQuery(e.target.value)} placeholder="Cari nama kontak…" aria-label="Cari nama kontak" />}
+      <StoryRow onOpenJejak={onOpenJejak} />
+      <div className="chips" role="group" aria-label="Saring obrolan">
+        {chips.map(([k, label]) => (
+          <button key={k} className="chip" aria-pressed={filter === k} onClick={() => setFilter(k)}>
+            {label}
+          </button>
+        ))}
+      </div>
       {s.contacts.length === 0 ? (
         <div className="empty">
           <div className="icon-wrap">
@@ -294,13 +385,17 @@ function Contacts() {
           </div>
           <div className="small">Belum ada kontak. Bagikan PIN Kambe-mu atau undang PIN orang lain.</div>
         </div>
+      ) : shown.length === 0 ? (
+        <div className="empty">
+          <div className="small">Tidak ada obrolan yang cocok.</div>
+        </div>
       ) : (
         <div className="list">
-          {s.contacts.map((c) => {
+          {shown.map((c) => {
             const pin = s.pins[c.id];
             const alert = !!s.keyAlerts[c.id];
             return (
-              <button key={c.id} className={`item ${s.activePeer === c.id ? "active" : ""}`} onClick={() => void m.openThread(c.id)} aria-current={s.activePeer === c.id}>
+              <button key={c.id} className={"item glass-item " + (s.activePeer === c.id ? "active " : "") + (c.unread > 0 ? "unread" : "")} onClick={() => void m.openThread(c.id)} aria-current={s.activePeer === c.id}>
                 <Avatar id={c.id} name={c.alias} />
                 <div className="grow">
                   <div className="row" style={{ gap: 6 }}>
@@ -312,12 +407,12 @@ function Contacts() {
                     ) : null}
                   </div>
                   <div className="tiny muted truncate">
-                    <SealedText<PmContent> view={c.pm} field="text" empty={`PIN ${c.pin}`} locked={`PIN ${c.pin}`} max={80} />
+                    <SealedText<PmContent> view={c.pm} field="text" empty={"PIN " + c.pin} locked={"PIN " + c.pin} max={80} />
                   </div>
                 </div>
                 <div className="stack" style={{ gap: 4, alignItems: "flex-end" }}>
                   {c.lastMessageAt && <span className="tiny muted">{timeOf(c.lastMessageAt)}</span>}
-                  {c.unread > 0 && <span className="count" aria-label={`${c.unread} pesan belum dibaca`}>{c.unread > 99 ? "99+" : c.unread}</span>}
+                  {c.unread > 0 && <span className="count" aria-label={c.unread + " pesan belum dibaca"}>{c.unread > 99 ? "99+" : c.unread}</span>}
                 </div>
               </button>
             );

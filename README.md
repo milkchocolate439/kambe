@@ -47,15 +47,31 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 ## Pengujian
 
 ```bash
-pnpm test           # kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
+pnpm test           # 146 tes: kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
                     # sengketa/moderator, PIN Bayang/Radar Arwah, Jejak, notaris (server sungguhan, DB di memori),
                     # env KAMBE_*/PINPATH_*, kompatibilitas data era PINPath + regresi red-team
-pnpm build && pnpm test:browser   # 4 suite Chromium headless: chat, dagang+moderator, Fase 3, brankas perangkat
+pnpm build && pnpm test:browser   # 8 suite Chromium headless: chat, dagang+moderator, Fase 3, brankas perangkat, audit HP, Panic Wipe, Etalase Hantu, UI v2
 ```
 
 Tes browser mencakup: undangan PIN, chat E2EE, status D/R, PING!!!, safety number,
 **payload XSS di isi chat**, peringatan anti-penipuan, deteksi kunci berubah (MITM),
 audit pelanggaran CSP, dan tata letak HP tanpa scroll horizontal. Screenshot di `tests/browser/out/`.
+
+## Fitur KAMBE v2 (Fase A)
+
+Rancangan lengkap: [`docs/superpowers/specs/2026-11-09-kambe-v2-design.md`](docs/superpowers/specs/2026-11-09-kambe-v2-design.md).
+
+| Fitur | Ringkas |
+|---|---|
+| **Escrow gratis** | Fee platform default 0% (`KAMBE_FEE_PER_MILLE=0`); invoice gateway tanpa split rule bila fee 0. Pemasukan: KAMBE PRO |
+| **Panic Wipe** | Tahan 2 detik (Pengaturan): cabut sesi server, hapus IndexedDB, Cache Storage, localStorage, service worker, lalu muat ulang bersih |
+| **Etalase Hantu** | Katalog tinggal di HP penjual (terenkripsi di brankas, hangus 72 jam, maks. 30 barang). Pembeli memintanya lewat pesan kendali E2EE; HP penjual menjawab otomatis. Katalog lawan hanya di memori. Pesanan → tawaran rekber otomatis |
+| **Buku Jejak Transaksi** | Tiap kuitansi notaris yang sah dicatat sebagai entri bertanda tangan Ed25519 perangkat (kunci dari frasa kunci), dirantai, dan dipertukarkan dengan lawan. Cocok = tiga tanda tangan (notaris + kamu + lawan). Beda = peringatan + ekspor bukti (tidak otomatis jadi sengketa) |
+| **UI v2** | Daftar obrolan di atas, baris cerita Jejak, chip filter, dock navigasi pil + tombol tambah di HP, profil kontak berkartu statistik. Palet KAMBE tetap |
+
+Catatan jujur: Etalase Hantu hanya bisa dilihat saat HP penjual menyala (pesan menunggu di relay hingga 30 hari); perangkat
+yang sudah terbuka sebelum v2 diminta masuk ulang sekali (untuk membuat kunci tanda tangan); Panic Wipe tidak bisa menghapus
+salinan di HP lawan bicara.
 
 ## Model keamanan
 

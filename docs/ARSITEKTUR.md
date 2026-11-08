@@ -183,3 +183,19 @@ dijaga oleh `tests/kambe-compat.test.ts` (memakai data contoh era PINPath di `te
 
 Env juga kompatibel ke belakang: server membaca `KAMBE_<NAMA>` lebih dulu, lalu `PINPATH_<NAMA>`
 (`server/env.ts`). Tanpa `KAMBE_DB`, server memakai `data/pinpath.db` bila sudah ada, selain itu `data/kambe.db`.
+
+## 7. KAMBE v2: pesan kendali, Etalase Hantu, Buku Jejak
+
+Fitur "tanpa server" dari konsep dijalankan lewat **relay E2EE yang sudah ada** (bukan WebRTC langsung): server tetap buta isi,
+bekerja di balik CGNAT, dan IP pengguna tidak terbuka. WebRTC relay-only tetap Fase B.
+
+| Komponen | Berkas | Catatan |
+|---|---|---|
+| Pesan kendali | `shared/ctl.ts`, `shared/e2ee.ts` (payload `ctl`) | Dikirim di saluran chat yang sama (kunci & AAD sama). Divalidasi ketat; tidak masuk linimasa/riwayat/hitungan belum dibaca. Dari kunci yang belum diakui = diabaikan |
+| Etalase Hantu | `client/src/lib/messenger.ts`, `client/src/ui/GhostStore.tsx` | Katalog = rahasia terenkripsi `ghost-store`; batas 20 permintaan & 5 pesanan/jam/kontak di perangkat penjual; pesanan memakai `orderId` sebagai idempotencyKey |
+| Zero-click | `Messenger.drainPending` | Pesan yang menunggu di relay diambil sekali per kontak saat tersambung, tanpa membuka chat |
+| Buku Jejak | `shared/txlog.ts`, `shared/vault.ts` (`signIdentityFromSeed`), `server/app.ts` (`PUT /api/me/sign-key`) | Kunci Ed25519 dari seed dengan label HKDF **baru** (`device-sign-ed25519`); label protokol lama tidak disentuh (dijaga `tests/kambe-compat.test.ts`). Server hanya menyimpan kunci publik |
+| Panic Wipe | `client/src/lib/panic.ts`, `client/src/ui/Panic.tsx` | Tiap langkah mandiri; offline tidak menghentikan penghapusan lokal |
+
+Temuan pada kode konsep yang **tidak** disalin: `innerHTML` dengan data penjual (XSS), hash tanpa verifikasi tanda tangan,
+sengketa otomatis dari hash tidak cocok, `REGISTER_PIN` tanpa autentikasi, kunci ECDSA `extractable`, dan WebRTC langsung yang membuka IP.

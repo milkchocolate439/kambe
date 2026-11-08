@@ -22,8 +22,24 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
     if (s.activePeer) setMoments(false);
   }, [s.activePeer]);
 
+  const openJejak = () => {
+    void m.openThread(null);
+    setMoments(true);
+  };
+  const goChats = () => {
+    void m.openThread(null);
+    setMoments(false);
+  };
+  const addContact = () => {
+    goChats();
+    setTimeout(() => {
+      document.getElementById("invite-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      document.querySelector<HTMLInputElement>("#invite-card input")?.focus({ preventScroll: true });
+    }, 60);
+  };
+
   return (
-    <div className="app">
+    <div className={"app" + (s.activePeer || moments ? " in-chat" : "")}>
       <header className="topbar">
         <Logo size={28} />
         <span className="brand hide-mobile">KAMBE</span>
@@ -45,7 +61,7 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
           <span className="hide-mobile">{s.conn === "online" ? "Tersambung" : s.conn === "connecting" ? "Menyambung…" : "Offline"}</span>
         </span>
         <button
-          className={`btn ${moments ? "primary" : "ghost"} icon`}
+          className={`btn ${moments ? "primary" : "ghost"} icon tb-action`}
           onClick={() => {
             void m.openThread(null);
             setMoments(!moments);
@@ -57,14 +73,14 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
           <Icon name="planet" />
         </button>
         {s.me.isModerator && (
-          <button className="btn ghost icon" onClick={() => setMod(true)} aria-label="Moderasi sengketa" title="Moderasi sengketa" style={{ color: "var(--brand-2)" }}>
+          <button className="btn ghost icon tb-action" onClick={() => setMod(true)} aria-label="Moderasi sengketa" title="Moderasi sengketa" style={{ color: "var(--brand-2)" }}>
             <Icon name="shieldCheck" />
           </button>
         )}
-        <button className="btn ghost icon" onClick={() => setStore(true)} aria-label="Toko & Dompet" title="Toko & Dompet (simulasi)" style={{ color: s.pro?.active ? "var(--amber)" : undefined }}>
+        <button className="btn ghost icon tb-action" onClick={() => setStore(true)} aria-label="Toko & Dompet" title="Toko & Dompet (simulasi)" style={{ color: s.pro?.active ? "var(--amber)" : undefined }}>
           <Icon name={s.pro?.active ? "crown" : "store"} />
         </button>
-        <button className="btn ghost icon" onClick={() => setSettings(true)} aria-label="Pengaturan">
+        <button className="btn ghost icon tb-action" onClick={() => setSettings(true)} aria-label="Pengaturan">
           <Icon name="settings" />
         </button>
       </header>
@@ -108,9 +124,40 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
       )}
 
       <div className={`layout ${s.activePeer || moments ? "chat-open" : ""}`}>
-        <Sidebar />
+        <Sidebar onOpenJejak={openJejak} />
         {moments ? <MomentsView onBack={() => setMoments(false)} /> : <Chat />}
       </div>
+
+      {/* Dock HP: navigasi pil melayang + tombol tambah (hanya di layar daftar; saat chat terbuka, topbar yang dipakai). */}
+      <nav className="dock only-mobile" aria-label="Navigasi utama">
+        <div className="dock-pill">
+          <button className={"dock-btn" + (!moments ? " on" : "")} aria-label="Obrolan" aria-current={!moments} onClick={goChats}>
+            <Icon name="inbox" size={20} />
+            <span className="dock-label" aria-hidden="true">Obrolan</span>
+          </button>
+          <button className={"dock-btn" + (moments ? " on" : "")} aria-label="Jejak" aria-pressed={moments} onClick={moments ? goChats : openJejak}>
+            <Icon name="planet" size={20} />
+            <span className="dock-label" aria-hidden="true">Jejak</span>
+          </button>
+          {s.me.isModerator && (
+            <button className="dock-btn" aria-label="Moderasi sengketa" onClick={() => setMod(true)}>
+              <Icon name="shieldCheck" size={20} />
+              <span className="dock-label" aria-hidden="true">Moderasi</span>
+            </button>
+          )}
+          <button className="dock-btn" aria-label="Toko & Dompet" onClick={() => setStore(true)}>
+            <Icon name={s.pro?.active ? "crown" : "store"} size={20} />
+            <span className="dock-label" aria-hidden="true">Toko</span>
+          </button>
+          <button className="dock-btn" aria-label="Pengaturan" onClick={() => setSettings(true)}>
+            <Icon name="settings" size={20} />
+            <span className="dock-label" aria-hidden="true">Profil</span>
+          </button>
+        </div>
+        <button className="dock-fab" aria-label="Tambah kontak" onClick={addContact}>
+          <Icon name="plus" size={24} />
+        </button>
+      </nav>
 
       {settings && <Settings onClose={() => setSettings(false)} onSignedOut={onSignedOut} />}
       {store && <StoreModal onClose={() => setStore(false)} />}

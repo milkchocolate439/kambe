@@ -4,6 +4,7 @@ import { ApiError } from "../lib/api.ts";
 import { Avatar, dayOf, Modal, timeOf, useMessenger } from "./common.tsx";
 import { CatalogModal, DealCard, OfferModal, StoreModal } from "./Commerce.tsx";
 import { GhostStoreModal } from "./GhostStore.tsx";
+import { ContactProfile } from "./Profile.tsx";
 import { Icon } from "./icons.tsx";
 import type { Deal } from "../../../shared/protocol.ts";
 
@@ -42,6 +43,7 @@ export function Chat() {
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<ChatMessage | null>(null);
   const [forgetAsk, setForgetAsk] = useState(false);
+  const [profile, setProfile] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
@@ -53,6 +55,7 @@ export function Chat() {
     setQuery("");
     setPicked(null);
     setForgetAsk(false);
+    setProfile(false);
   }, [peer]);
 
   // PING!!! dari kontak yang sedang dibuka → layar bergetar.
@@ -152,7 +155,9 @@ export function Chat() {
         <button className="btn ghost icon only-mobile" onClick={() => void m.openThread(null)} aria-label="Kembali ke daftar">
           <Icon name="back" />
         </button>
-        <Avatar id={contact.id} name={contact.alias} />
+        <button className="avatar-btn" onClick={() => setProfile(true)} aria-label="Profil kontak" title="Profil kontak">
+          <Avatar id={contact.id} name={contact.alias} />
+        </button>
         <div className="grow">
           <div className="row" style={{ gap: 6 }}>
             <strong className="truncate">{contact.alias}</strong>
@@ -335,6 +340,19 @@ export function Chat() {
         </button>
       </form>
 
+      {profile && (
+        <ContactProfile
+          peer={peer}
+          onClose={() => setProfile(false)}
+          actions={{
+            onSafety: () => setSafety(true),
+            onGhost: () => setShop("ghost"),
+            onSearch: () => setSearching(true),
+            onRemove: () => setMenu("remove"),
+            onBlock: () => setMenu("block"),
+          }}
+        />
+      )}
       {safety && <SafetyModal peer={peer} onClose={() => setSafety(false)} />}
       {shop === "catalog" && <CatalogModal peer={peer} peerAlias={contact.alias} onClose={() => setShop(null)} />}
       {shop === "ghost" && <GhostStoreModal peer={peer} peerAlias={contact.alias} onClose={() => setShop(null)} />}
