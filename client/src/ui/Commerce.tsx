@@ -22,6 +22,8 @@ import { Icon } from "./icons.tsx";
 import { DisputeModal, DisputeThread, ResolutionNote, ShipmentInfo, ShipModal } from "./Disputes.tsx";
 
 export const rupiah = (n: number) => "Rp" + n.toLocaleString("id-ID");
+/** Pratinjau fee dengan tarif dari server (0 = escrow gratis). Server tetap yang menghitung fee sebenarnya. */
+const feeOf = (price: number, perMille: number | undefined) => platformFee(price, perMille ?? FEE_PER_MILLE);
 const newKey = () => crypto.randomUUID().replace(/-/g, "");
 
 export function SimBadge() {
@@ -101,7 +103,7 @@ const ACTIONS: Record<DealAction, { label: string; primary?: boolean; danger?: b
   confirm: {
     label: "Barang diterima · cairkan",
     primary: true,
-    confirm: (d) => `${rupiah(d.sellerNet)} diteruskan ke penjual (setelah fee platform). Hanya konfirmasi kalau barang/jasa benar-benar sudah kamu terima. Tidak bisa dibatalkan.`,
+    confirm: (d) => `${rupiah(d.sellerNet)} diteruskan ke penjual${d.fee > 0 ? " (setelah fee platform)" : " (escrow gratis, tanpa potongan)"}. Hanya konfirmasi kalau barang/jasa benar-benar sudah kamu terima. Tidak bisa dibatalkan.`,
   },
   cancel: { label: "Batalkan" },
   refund: {
@@ -153,8 +155,8 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         <span>{peerAlias}</span>
         <span className="muted">Harga</span>
         <span className="mono">{rupiah(deal.price)}</span>
-        <span className="muted">Fee platform ({((deal.fee / deal.price) * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 })}%)</span>
-        <span className="mono">−{rupiah(deal.fee)}</span>
+        <span className="muted">{deal.fee > 0 ? `Fee platform (${((deal.fee / deal.price) * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 })}%)` : "Biaya escrow KAMBE"}</span>
+        <span className="mono">{deal.fee > 0 ? `−${rupiah(deal.fee)}` : "Gratis"}</span>
         <span className="muted">Diterima penjual</span>
         <span className="mono">{rupiah(deal.sellerNet)}</span>
       </div>
@@ -306,8 +308,8 @@ export function CatalogModal({ peer, peerAlias, onClose }: { peer: string; peerA
           <div className="deal-grid small">
             <span className="muted">Harga (dikunci server)</span>
             <span className="mono">{rupiah(chosen.product.price)}</span>
-            <span className="muted">Fee platform ditanggung penjual</span>
-            <span className="mono">{rupiah(platformFee(chosen.product.price, s.config?.feePerMille))}</span>
+            <span className="muted">{feeOf(chosen.product.price, s.config?.feePerMille) > 0 ? "Fee platform ditanggung penjual" : "Biaya escrow KAMBE"}</span>
+            <span className="mono">{feeOf(chosen.product.price, s.config?.feePerMille) > 0 ? rupiah(feeOf(chosen.product.price, s.config?.feePerMille)) : "Gratis"}</span>
           </div>
           <div className="banner info" style={{ borderRadius: 12, border: 0 }}>
             <Icon name="shieldCheck" />
@@ -391,7 +393,9 @@ export function OfferModal({ peer, peerAlias, onClose }: { peer: string; peerAli
               <span className="error">{problem}</span>
             ) : (
               <span className="hint">
-                Kamu menerima {rupiah(price - platformFee(price, perMille))} setelah fee platform ({rupiah(platformFee(price, perMille))}).
+                {feeOf(price, perMille) > 0
+                  ? `Kamu menerima ${rupiah(price - feeOf(price, perMille))} setelah fee platform (${rupiah(feeOf(price, perMille))}).`
+                  : `Kamu menerima ${rupiah(price)} utuh — escrow KAMBE gratis.`}
               </span>
             ))}
         </div>
@@ -556,7 +560,11 @@ function ProTab() {
         <ul className="small" style={{ margin: "10px 0 0", paddingLeft: 18, color: "var(--text-2)" }}>
           <li>Buka etalase produk/jasa untuk kontakmu</li>
           <li>Tawarkan kesepakatan rekber langsung dari chat</li>
-          <li>Fee {((s.config?.feePerMille ?? FEE_PER_MILLE) / 10).toLocaleString("id-ID")}% hanya dipotong saat dana cair (tidak saat refund)</li>
+          {(s.config?.feePerMille ?? FEE_PER_MILLE) > 0 ? (
+            <li>Fee {((s.config?.feePerMille ?? FEE_PER_MILLE) / 10).toLocaleString("id-ID")}% hanya dipotong saat dana cair (tidak saat refund)</li>
+          ) : (
+            <li>Escrow (rekber) gratis — KAMBE tidak memotong dana penjual</li>
+          )}
         </ul>
       </div>
       {pro?.active ? (

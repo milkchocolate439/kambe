@@ -19,10 +19,11 @@ function fakeGateway() {
   return { calls, fetchImpl };
 }
 
-async function gatewayMarket() {
+async function gatewayMarket(feePerMille = 25) {
   const gw = fakeGateway();
   const app = createApp({
     dbPath: ":memory:",
+    feePerMille, // default tes: tarif berbayar 2,5% agar jalur split rule teruji
     payments: xenditProvider({ secretKey: SECRET, callbackToken: TOKEN, splitRuleId: "splitru_fee25", successUrl: "https://kambe.example/bayar-selesai", fetchImpl: gw.fetchImpl }),
   });
   await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", () => r()));
@@ -70,6 +71,18 @@ test("gateway: invoice dibuat DI SERVER dengan split ke sub-akun penjual; ponsel
   // Klik ganda tidak membuat invoice kedua.
   await buyer.post(`/api/deals/${deal.id}/pay`);
   assert.equal(gw.calls.length, 1);
+  await app.close();
+});
+
+test("gateway + escrow gratis: invoice TANPA split rule (tidak ada fee untuk dipotong)", async () => {
+  const { app, gw, buyer, sellerId, deal } = await gatewayMarket(0);
+  assert.equal(deal.fee, 0);
+  app.db.prepare("UPDATE users SET gateway_account = ? WHERE id = ?").run("acc_penjual_01", sellerId);
+  await buyer.post(`/api/deals/${deal.id}/pay`);
+  assert.equal(gw.calls.length, 1);
+  assert.equal(gw.calls[0].headers["with-split-rule"], undefined, "fee 0 → split rule tidak dikirim");
+  assert.equal(gw.calls[0].headers["for-user-id"], "acc_penjual_01", "dana tetap masuk ke sub-akun penjual");
+  assert.equal(gw.calls[0].body.amount, 4_000_000);
   await app.close();
 });
 

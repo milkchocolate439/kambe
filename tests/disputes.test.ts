@@ -11,7 +11,7 @@ const DISPUTE = { reason: "not_as_described", text: "Biji kopi yang datang robus
 
 /** Pasar kecil dengan satu moderator dan satu kesepakatan yang sudah dibayar (semua isi terenkripsi). */
 async function disputedMarket(opts: { shipped?: boolean; disputed?: boolean } = { shipped: true, disputed: true }) {
-  const env = await startApp();
+  const env = await startApp({ feePerMille: 50 }); // tarif berbayar: memastikan putusan memotong/tidak memotong fee dengan benar
   const seller = new Client(env.base);
   const buyer = new Client(env.base);
   const mod = new Client(env.base);

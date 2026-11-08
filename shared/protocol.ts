@@ -198,7 +198,12 @@ export type ServerEvent =
 
 export const PRO_PRICE = 49_000;
 export const PRO_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
-export const FEE_PER_MILLE = 50; // 5% — keputusan pemilik produk (bisa diubah: KAMBE_FEE_PER_MILLE)
+/**
+ * Fee platform per seribu. 0 = ESCROW GRATIS (keputusan pemilik produk, 9 Nov 2026; sebelumnya 5%).
+ * Tetap bisa diubah lewat KAMBE_FEE_PER_MILLE (25 = 2,5%, 50 = 5%, maks. 200). Tarif tersimpan per
+ * kesepakatan saat dibuat, jadi mengubahnya tidak memengaruhi kesepakatan lama.
+ */
+export const FEE_PER_MILLE = 0;
 export const PRICE_MIN = 1_000;
 export const PRICE_MAX = 100_000_000;
 export const PRODUCT_TITLE_MAX = 80;
@@ -206,7 +211,7 @@ export const PRODUCT_DESC_MAX = 500;
 export const MAX_PRODUCTS = 50;
 export const SECTORS = ["Komoditas & Pangan", "Jasa Digital & IT", "Desain & Kreatif", "Logistik & B2B", "Lainnya"] as const;
 
-/** Fee platform (default 5%) dibulatkan ke rupiah terdekat (setengah ke atas) — aritmetika bilangan bulat. */
+/** Fee platform (default 0 = escrow gratis) dibulatkan ke rupiah terdekat (setengah ke atas) — aritmetika bilangan bulat. */
 export function platformFee(price: number, perMille: number = FEE_PER_MILLE): number {
   return Math.floor((price * perMille + 500) / 1000);
 }

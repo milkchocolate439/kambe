@@ -33,7 +33,7 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 | `KAMBE_SECURE` | – | `1` di balik HTTPS → cookie `Secure` + HSTS |
 | `KAMBE_TRUST_PROXY` | – | `1` hanya bila di belakang reverse proxy milik sendiri |
 | `KAMBE_ORIGINS` | – | Daftar Origin yang diizinkan (koma). Kosong = harus sama dengan Host |
-| `KAMBE_FEE_PER_MILLE` | `50` | Fee platform per seribu (**default 50 = 5%**; 25 = 2,5%; maks. 200). Tersimpan per kesepakatan saat dibuat |
+| `KAMBE_FEE_PER_MILLE` | `0` | Fee platform per seribu (**default 0 = escrow gratis**; 25 = 2,5%; 50 = 5%; maks. 200). Tersimpan per kesepakatan saat dibuat; fee 0 = invoice gateway tanpa split rule |
 | `KAMBE_NOTARY_KEY` / `KAMBE_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
 | `KAMBE_PAYMENT_PROVIDER` | `simulasi` | `xendit` untuk gateway nyata (butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `KAMBE_PUBLIC_URL`, opsional `XENDIT_SPLIT_RULE_ID`) |
 | `KAMBE_PUBLIC_URL` | – | Alamat publik aplikasi (tujuan kembali setelah bayar di gateway) |
@@ -77,7 +77,7 @@ audit pelanggaran CSP, dan tata letak HP tanpa scroll horizontal. Screenshot di 
 ### Yang **diketahui server** (metadata)
 
 Alias, PIN, siapa terhubung dengan siapa, waktu kirim, ukuran ciphertext, apakah sebuah pesan adalah PING
-(untuk rate limit), serta harga/fee/status kesepakatan (wajib untuk rekber & fee 5%). Semua **isi** tulisan
+(untuk rate limit), serta harga/fee/status kesepakatan (wajib untuk rekber; fee default 0 = escrow gratis). Semua **isi** tulisan
 pengguna hanya tersimpan sebagai ciphertext.
 
 ### Batasan saat ini (jujur)
@@ -99,7 +99,7 @@ pengguna hanya tersimpan sebagai ciphertext.
 
 - **PRO Rp49.000/bln** (divalidasi server, idempoten): membuka etalase & tawaran kesepakatan dari chat.
 - **Etalase hanya untuk kontak** yang sudah disetujui (bukan publik).
-- **Alur rekber**: `AWAITING_PAYMENT → HELD (dana ditahan) → SHIPPED → COMPLETED (dana cair, fee 5%)`.
+- **Alur rekber**: `AWAITING_PAYMENT → HELD (dana ditahan) → SHIPPED → COMPLETED (dana cair utuh — escrow gratis)`.
   Pembatalan sebelum bayar; penjual bisa refund penuh tanpa fee; pembeli bisa sengketa (menghentikan pencairan otomatis).
 - **Tenggat anti-sandera (kedua arah)** — dana tidak pernah bisa terkunci selamanya:
 

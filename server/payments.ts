@@ -14,6 +14,8 @@ export interface PaymentRequest {
   dealId: string;
   payRef: string; // kode bayar sekali pakai — jadi external_id di gateway (tanpa identitas)
   amount: number; // rupiah utuh
+  /** Fee platform kesepakatan ini; 0 = escrow gratis → tidak ada split rule ke gateway. */
+  fee: number;
   description: string;
   sellerAccount: string | null; // id sub-akun penjual di gateway
 }
@@ -72,7 +74,8 @@ export function xenditProvider(o: XenditOptions): PaymentProvider {
         "content-type": "application/json",
         "for-user-id": req.sellerAccount, // dana masuk ke sub-akun penjual…
       };
-      if (o.splitRuleId) headers["with-split-rule"] = o.splitRuleId; // …dengan fee developer dipotong otomatis
+      // …dengan fee developer dipotong otomatis. Escrow gratis (fee 0) = tanpa split rule sama sekali.
+      if (o.splitRuleId && req.fee > 0) headers["with-split-rule"] = o.splitRuleId;
       const res = await fetcher(`${base}/v2/invoices`, {
         method: "POST",
         headers,

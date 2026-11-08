@@ -108,6 +108,7 @@ async function main() {
     await card.waitFor();
     check((await card.textContent())?.includes("Rp850.000"), "kartu kesepakatan muncul di chat dengan harga dari server");
     check((await card.textContent())?.includes("SIMULASI"), "label SIMULASI selalu terlihat");
+    check((await card.textContent())?.includes("Gratis"), "kartu kesepakatan menyatakan escrow KAMBE gratis");
     await card.getByText(/Kuitansi #0 sah \(ditandatangani notaris\)/).waitFor();
     check(true, "kuitansi notaris #0 diverifikasi di perangkat pembeli");
 
@@ -176,8 +177,8 @@ async function main() {
     check(true, "rantai kuitansi #0→#3 sah di kedua perangkat");
     await seller.getByRole("button", { name: "Toko & Dompet" }).click();
     await seller.getByRole("tab", { name: "Dompet" }).click();
-    await seller.getByText("Rp807.500").first().waitFor();
-    check(true, "saldo penjual = harga − fee 5% (Rp807.500)");
+    await seller.locator(".modal").getByText("Rp850.000").first().waitFor();
+    check(true, "escrow gratis: saldo penjual = harga penuh (Rp850.000)");
     await seller.screenshot({ path: join(OUT, "c2-seller-wallet.png") });
     await seller.keyboard.press("Escape");
 
@@ -185,7 +186,7 @@ async function main() {
     await seller.getByRole("button", { name: "Tawarkan kesepakatan rekber" }).click();
     await seller.getByLabel("Barang / jasa").fill("Roasting kustom 2 Kg");
     await seller.getByLabel("Harga").fill("320000");
-    check(await seller.getByText("Kamu menerima Rp304.000").isVisible(), "pratinjau dana bersih untuk penjual (fee 5%)");
+    check(await seller.getByText(/Kamu menerima Rp320\.000 utuh/).isVisible(), "pratinjau dana penjual utuh (escrow gratis)");
     await seller.getByRole("button", { name: "Kirim tawaran" }).click();
     await buyer.locator(".deal-card", { hasText: "Roasting kustom 2 Kg" }).getByText("Menunggu pembayaran").waitFor();
     check(true, "tawaran kustom muncul real-time di chat pembeli");

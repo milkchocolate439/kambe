@@ -30,7 +30,7 @@ test("setiap perubahan status menerbitkan kuitansi notaris yang sah & berantai",
   const { app, base, seller, buyer, deal } = await dealFlow();
   const cfg = (await fetch(base + "/api/config").then((r) => r.json())) as { notaryPublicKey: string; feePerMille: number };
   assert.equal(cfg.notaryPublicKey, app.notaryPublicKey);
-  assert.equal(cfg.feePerMille, 50, "default 5%");
+  assert.equal(cfg.feePerMille, 0, "default escrow gratis");
 
   assert.equal(parseReceipt(deal.receipt).seq, 0);
   assert.equal(parseReceipt(deal.receipt).status, "AWAITING_PAYMENT");
@@ -46,8 +46,8 @@ test("setiap perubahan status menerbitkan kuitansi notaris yang sah & berantai",
   assert.equal(last.seq, 3);
   assert.equal(last.status, "COMPLETED");
   assert.equal(last.price, 200_000);
-  assert.equal(last.fee, 10_000); // 5% dari 200.000
-  assert.equal(last.sellerNet, 190_000);
+  assert.equal(last.fee, 0); // escrow gratis: kuitansi notaris mencatat fee 0
+  assert.equal(last.sellerNet, 200_000);
   assert.equal(last.payRef, done.payRef);
 
   const chain = (await buyer.get(`/api/deals/${deal.id}/receipts`)).body.receipts as SignedReceipt[];
@@ -89,7 +89,7 @@ test("kuitansi hanya untuk pihak terkait; kode bayar sekali pakai tanpa identita
 });
 
 test("fee dapat diatur lewat konfigurasi; tarif tidak masuk akal ditolak saat start", async () => {
-  // Default kini 5%; buktikan konfigurasi dengan nilai lain (2,5%).
+  // Default kini escrow gratis (0); buktikan tarif berbayar tetap bisa dipakai lewat konfigurasi (2,5%).
   const app = createApp({ dbPath: ":memory:", feePerMille: 25 });
   await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", () => r()));
   const base = `http://127.0.0.1:${(app.server.address() as { port: number }).port}`;

@@ -1,15 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { addProduct, Client, createDeal, offerDeal, shipDeal, disputeDeal, startApp, TEST_PASSPHRASE } from "./helpers.ts";
-import { platformFee, PRO_PRICE, type ProductContent, type DealContent } from "../shared/protocol.ts";
+import { FEE_PER_MILLE, platformFee, PRO_PRICE, type ProductContent, type DealContent } from "../shared/protocol.ts";
 import type { DealTimers } from "../server/commerce.ts";
 
 const key = () => crypto.randomUUID().replace(/-/g, "");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Penjual PRO dengan satu produk (isi terenkripsi untuk kontak) + pembeli yang sudah terhubung. */
-async function market(opts: { dealTimers?: Partial<DealTimers> } = {}) {
-  const env = await startApp(opts);
+/**
+ * Penjual PRO dengan satu produk (isi terenkripsi untuk kontak) + pembeli yang sudah terhubung.
+ * Default tes ini memakai tarif BERBAYAR 5% agar mekanisme fee (pembukuan, refund tanpa fee) tetap
+ * teruji walau default produk sekarang escrow gratis (lihat tes "escrow gratis" di bawah).
+ */
+async function market(opts: { dealTimers?: Partial<DealTimers>; feePerMille?: number } = {}) {
+  const env = await startApp({ feePerMille: 50, ...opts });
   const seller = new Client(env.base);
   const buyer = new Client(env.base);
   const s = await seller.signup("KopiGayo_Roaster");
@@ -24,12 +28,31 @@ async function market(opts: { dealTimers?: Partial<DealTimers> } = {}) {
   return { ...env, seller, buyer, s: s.me, b: b.me, prod, buy };
 }
 
-test("fee default 5%: bilangan bulat, pembulatan setengah ke atas", () => {
-  assert.equal(platformFee(1_000), 50);
-  assert.equal(platformFee(1_009), 50); // 50,45 → 50
-  assert.equal(platformFee(1_010), 51); // 50,5  → 51
-  assert.equal(platformFee(850_000), 42_500);
-  assert.equal(platformFee(100_000_000), 5_000_000);
+test("escrow gratis: default fee 0 untuk semua harga", () => {
+  assert.equal(FEE_PER_MILLE, 0);
+  for (const p of [1_000, 1_009, 850_000, 100_000_000]) assert.equal(platformFee(p), 0);
+});
+
+test("fee berbayar 5% (bila diaktifkan): bilangan bulat, pembulatan setengah ke atas", () => {
+  assert.equal(platformFee(1_000, 50), 50);
+  assert.equal(platformFee(1_009, 50), 50); // 50,45 → 50
+  assert.equal(platformFee(1_010, 50), 51); // 50,5  → 51
+  assert.equal(platformFee(850_000, 50), 42_500);
+  assert.equal(platformFee(100_000_000, 50), 5_000_000);
+});
+
+test("escrow gratis end-to-end: penjual menerima harga penuh, platform tidak memotong apa pun", async () => {
+  const { app, seller, buyer, buy } = await market({ feePerMille: 0 });
+  const deal = (await buy()).body;
+  assert.equal(deal.fee, 0);
+  assert.equal(deal.sellerNet, 850_000);
+  await buyer.post(`/api/deals/${deal.id}/pay`);
+  await shipDeal(seller, deal.id);
+  assert.equal((await buyer.post(`/api/deals/${deal.id}/confirm`)).status, 200);
+  assert.equal((await seller.get("/api/wallet")).body.balance, 850_000, "dana penjual utuh");
+  assert.equal(app.audit().platform, PRO_PRICE, "platform hanya menerima langganan PRO, bukan potongan rekber");
+  assert.equal(app.audit().balanced, true);
+  await app.close();
 });
 
 test("tarif lain tetap bisa dipakai (mis. 2,5%) dengan pembulatan yang sama", () => {

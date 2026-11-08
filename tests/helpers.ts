@@ -49,7 +49,7 @@ export async function resolveDispute(mod: Client, dealId: string, decision: stri
 
 export const TEST_PASSPHRASE = "kunci-uji-yang-panjang-sekali";
 
-export async function startApp(opts: { dealTimers?: Partial<DealTimers> } = {}) {
+export async function startApp(opts: { dealTimers?: Partial<DealTimers>; feePerMille?: number } = {}) {
   const app = createApp({ dbPath: ":memory:", ...opts });
   await new Promise<void>((r) => app.server.listen(0, "127.0.0.1", () => r()));
   const port = (app.server.address() as AddressInfo).port;

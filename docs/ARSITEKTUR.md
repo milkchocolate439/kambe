@@ -47,7 +47,7 @@ kepatuhan hukum Indonesia → kenyamanan → kesederhanaan.
 | HD wallet / master seed | **Diadopsi bertahap** | Tahap berikut: frasa pemulihan → kunci identitas deterministik, agar pindah ponsel tidak mengubah safety number. |
 | PIN dinamis (TOTP per N detik) | **Disesuaikan** | TOTP butuh rahasia bersama, sehingga orang asing tak bisa menemukanmu. Penggantinya: **PIN sekali pakai** (hangus setelah 1 undangan), **PIN Bayang 24 jam**, **PIN Radar Arwah**, dan **rotasi PIN utama otomatis**. Kontak hanya melihat PIN yang mereka pakai → PIN berbeda tidak bisa dikaitkan oleh sesama pengguna. |
 | Stealth address / one-time payment code | **Disesuaikan** | Setiap kesepakatan memakai **kode referensi bayar sekali pakai** yang tidak memuat identitas; kuitansi hanya berisi alias saat transaksi. |
-| Fee 5% (dokumen) | **Diadopsi (keputusan pemilik)** | Default **5%** (`FEE_PER_MILLE = 50`); tetap bisa diubah dengan `KAMBE_FEE_PER_MILLE` (nama lama `PINPATH_*` masih diterima) (25 = 2,5%, 50 = 5%, maks. 200). Fee tersimpan di setiap kesepakatan saat dibuat, jadi perubahan tarif tidak mengubah kesepakatan lama. |
+| Fee 5% (dokumen) | **Diganti: escrow GRATIS (keputusan pemilik 9 Nov 2026)** | Default **0%** (`FEE_PER_MILLE = 0`; sebelumnya 5%). Invoice gateway tanpa split rule bila fee 0; tetap bisa diubah dengan `KAMBE_FEE_PER_MILLE` (nama lama `PINPATH_*` masih diterima) (25 = 2,5%, 50 = 5%, maks. 200). Fee tersimpan di setiap kesepakatan saat dibuat, jadi perubahan tarif tidak mengubah kesepakatan lama. |
 
 ## 3. Apa yang diketahui server (setelah penyelarasan)
 
@@ -91,7 +91,7 @@ Aturan di server:
 |---|---|
 | Alias, PIN, kunci publik | Direktori untuk saling menemukan |
 | Siapa berteman dengan siapa, waktu & status kirim | Metadata routing relay |
-| Harga, fee, status kesepakatan, buku besar | Fee 5% & rekber ditegakkan di server; harus bisa diaudit |
+| Harga, fee, status kesepakatan, buku besar | Rekber (dan fee bila diaktifkan; default gratis) ditegakkan di server; harus bisa diaudit |
 | Iklan Radar Arwah (citra) | Memang publik bagi peserta radar |
 | Pilihan putusan moderator (refund/release) | Menggerakkan uang |
 
