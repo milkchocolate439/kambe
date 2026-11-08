@@ -175,6 +175,10 @@ async function main() {
     await card.getByText(/Kuitansi #3 sah/).waitFor();
     await seller.locator(".deal-card", { hasText: "Arabica Gayo Wine 5 Kg" }).getByText(/Kuitansi #3 sah/).waitFor();
     check(true, "rantai kuitansi #0→#3 sah di kedua perangkat");
+    // Buku Jejak Transaksi: kedua perangkat menandatangani kuitansi #3 dan saling mencocokkan.
+    await card.getByText(/Buku Jejak: 3 tanda tangan cocok/).waitFor({ timeout: 15000 });
+    await seller.locator(".deal-card", { hasText: "Arabica Gayo Wine 5 Kg" }).getByText(/Buku Jejak: 3 tanda tangan cocok/).waitFor({ timeout: 15000 });
+    check(true, "Buku Jejak: tiga tanda tangan (notaris + pembeli + penjual) cocok di kedua perangkat");
     await seller.getByRole("button", { name: "Toko & Dompet" }).click();
     await seller.getByRole("tab", { name: "Dompet" }).click();
     await seller.locator(".modal").getByText("Rp850.000").first().waitFor();

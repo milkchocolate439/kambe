@@ -95,6 +95,18 @@ async function isUsableX25519(publicKey: string): Promise<boolean> {
   }
 }
 
+/** Kunci tanda tangan Buku Jejak Transaksi: 32 byte, bukan nol, dan dapat diimpor sebagai Ed25519. */
+async function isUsableEd25519(publicKey: string): Promise<boolean> {
+  try {
+    const raw = Buffer.from(publicKey, "base64");
+    if (raw.length !== 32 || raw.every((b) => b === 0)) return false;
+    await globalThis.crypto.subtle.importKey("raw", raw, { name: "Ed25519" }, false, ["verify"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 
 export function createApp(opts: AppOptions) {
   const db: DB = openDb(opts.dbPath);
@@ -154,6 +166,7 @@ export function createApp(opts: AppOptions) {
       alias: u.alias,
       pin: u.pin,
       publicKey: u.public_key,
+      signKey: u.sign_key,
       pm: sealed.view(u.pm_object, u.id),
       readReceipts: u.read_receipts === 1,
       createdAt: u.created_at,
@@ -522,6 +535,19 @@ export function createApp(opts: AppOptions) {
     return { me: toMe(getUser(user.id)!) };
   }));
 
+  // Kunci tanda tangan Buku Jejak Transaksi (Ed25519). Hanya kunci PUBLIK; yang privat tidak pernah ke server.
+  route("PUT", "/api/me/sign-key", authed(async ({ req, user }) => {
+    limit(`sign-key:${user.id}`, 10, 24 * HOUR, "Kunci tanda tangan terlalu sering diganti hari ini.");
+    const signKey = (await readJson(req)).signKey;
+    if (typeof signKey !== "string" || signKey.length !== 44 || !(await isUsableEd25519(signKey))) {
+      throw new HttpError(400, "bad_sign_key", "Kunci tanda tangan tidak valid");
+    }
+    if (signKey === user.sign_key) return { me: toMe(user) };
+    db.prepare("UPDATE users SET sign_key = ? WHERE id = ?").run(signKey, user.id);
+    for (const row of q.contactIds.all(user.id) as { peer_id: string }[]) emit(row.peer_id, { t: "contacts_changed" });
+    return { me: toMe(getUser(user.id)!) };
+  }));
+
   route("PATCH", "/api/me/settings", authed(async ({ req, user }) => {
     const body = await readJson(req);
     if (body.pm !== undefined) throw new HttpError(400, "pm_must_be_encrypted", "Status pribadi wajib terenkripsi (PUT /api/me/status)");
@@ -625,7 +651,7 @@ export function createApp(opts: AppOptions) {
     const contacts = (
       db
         .prepare(
-          `SELECT u.id, u.alias, COALESCE(c.via_pin, u.pin) AS pin, u.public_key, u.pm_object, c.since,
+          `SELECT u.id, u.alias, COALESCE(c.via_pin, u.pin) AS pin, u.public_key, u.sign_key, u.pm_object, c.since,
              (SELECT COUNT(*) FROM messages m WHERE m.sender_id = u.id AND m.recipient_id = c.user_id AND m.read_at IS NULL) AS unread,
              (SELECT MAX(m.created_at) FROM messages m
                 WHERE (m.sender_id = u.id AND m.recipient_id = c.user_id) OR (m.sender_id = c.user_id AND m.recipient_id = u.id)) AS last_at
@@ -640,6 +666,7 @@ export function createApp(opts: AppOptions) {
         alias: r.alias as string,
         pin: r.pin as string,
         publicKey: r.public_key as string | null,
+        signKey: (r.sign_key as string | null) ?? null,
         pm: sealed.view(r.pm_object as string | null, userId),
         since: r.since as number,
         unread: r.unread as number,

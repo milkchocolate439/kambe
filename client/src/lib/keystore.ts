@@ -10,7 +10,7 @@
 //  - identity : (lama) kunci perangkat acak sebelum Tahap 2; dihapus setelah migrasi.
 
 import type { Identity } from "../../../shared/e2ee.ts";
-import { openRecord, sealRecord, type LocalKeys, type SealedRecord, type VaultBlob } from "../../../shared/vault.ts";
+import { openRecord, sealRecord, type LocalKeys, type SealedRecord, type SignIdentity, type VaultBlob } from "../../../shared/vault.ts";
 
 const DB_NAME = "pinpath"; // label protokol, jangan diganti (lihat spec KAMBE)
 const VERSION = 4;
@@ -45,7 +45,10 @@ interface StoredMessage extends SealedRecord {
 }
 
 /** Kunci yang sedang terbuka di perangkat ini. */
-export interface UnlockedDevice extends Identity, LocalKeys {}
+export interface UnlockedDevice extends Identity, LocalKeys {
+  /** Kunci tanda tangan Buku Jejak Transaksi (Ed25519, dari seed). Perangkat terbuka versi lama tidak punya → wajib masuk ulang. */
+  sign: SignIdentity;
+}
 
 export function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

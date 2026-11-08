@@ -29,6 +29,8 @@ export interface UserRow {
   pin_rotated_at: number;
   gateway_account: string | null;
   pm_object: string | null;
+  /** Kunci publik Ed25519 untuk tanda tangan Buku Jejak Transaksi (null = belum didaftarkan). */
+  sign_key: string | null;
 }
 
 export interface Ctx {

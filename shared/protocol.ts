@@ -37,6 +37,8 @@ export interface PublicUser {
   alias: string;
   pin: string;
   publicKey: string | null;
+  /** Kunci publik Ed25519 untuk memverifikasi tanda tangan Buku Jejak Transaksi (diturunkan dari frasa kunci). */
+  signKey: string | null;
   /** Status pribadi terenkripsi (PmContent); null = tidak ada / belum dibagikan ke kamu. */
   pm: SealedView | null;
 }

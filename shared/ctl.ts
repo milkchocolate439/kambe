@@ -6,6 +6,7 @@
 
 import { cleanDisplayText } from "./sealed.ts";
 import { PRICE_MAX, PRICE_MIN } from "./protocol.ts";
+import { parseTxEntry, type SignedTxEntry } from "./txlog.ts";
 
 export const GHOST_TTL_MS = 72 * 60 * 60 * 1000;
 export const GHOST_MAX_ITEMS = 30;
@@ -35,7 +36,9 @@ export type Ctl =
   | { t: "store.req"; reqId: string }
   | { t: "store.res"; reqId: string; part: number; parts: number; items: GhostItem[]; storeExpiresAt: number }
   | { t: "store.order"; orderId: string; itemId: string }
-  | { t: "store.nack"; orderId: string; reason: NackReason };
+  | { t: "store.nack"; orderId: string; reason: NackReason }
+  /** Entri Buku Jejak Transaksi bertanda tangan perangkat pengirim (diverifikasi penerima). */
+  | { t: "txlog.entry"; entry: SignedTxEntry };
 
 export class CtlError extends Error {}
 
@@ -92,6 +95,18 @@ export function validateCtl(raw: unknown): Ctl {
     case "store.nack":
       if (typeof raw.reason !== "string" || !NACK_REASONS.includes(raw.reason)) return fail("alasan tidak dikenal");
       return { t: "store.nack", orderId: id(raw.orderId, "orderId"), reason: raw.reason as NackReason };
+    case "txlog.entry": {
+      const e = raw.entry;
+      if (!isObj(e) || typeof e.body !== "string" || typeof e.sig !== "string" || typeof e.signKey !== "string") return fail("entri tidak valid");
+      if (e.sig.length > 100 || e.signKey.length !== 44) return fail("tanda tangan tidak valid");
+      const entry = { body: e.body, sig: e.sig, signKey: e.signKey };
+      try {
+        parseTxEntry(entry);
+      } catch {
+        return fail("entri tidak dikenal");
+      }
+      return { t: "txlog.entry", entry };
+    }
     default:
       return fail("jenis pesan kendali tidak dikenal");
   }

@@ -177,6 +177,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         </div>
       )}
       <ReceiptLine deal={deal} />
+      <TxLine deal={deal} peerAlias={peerAlias} />
       {deal.paymentUrl?.startsWith("https://") && iAmBuyer && (
         <a className="btn primary small" href={deal.paymentUrl} target="_blank" rel="noopener noreferrer">
           Lanjutkan ke halaman bayar resmi
@@ -264,6 +265,51 @@ function ReceiptLine({ deal }: { deal: Deal }) {
     <span className="tiny" style={{ color: r.state === "missing" ? "var(--muted)" : "var(--danger)", fontWeight: 700 }}>
       <Icon name="alert" size={12} /> {text}
       {r.state !== "missing" && " Jangan lanjutkan pembayaran."}
+    </span>
+  );
+}
+
+/** Buku Jejak Transaksi: status tanda tangan (notaris + perangkat + lawan) & ekspor bukti. */
+function TxLine({ deal, peerAlias }: { deal: Deal; peerAlias: string }) {
+  const [s, m] = useMessenger();
+  const t = s.txlog[deal.id];
+  if (!t) return null;
+  async function save() {
+    try {
+      const blob = await m.exportTxEvidence(deal.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `kambe-bukti-${deal.id.slice(0, 8)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      m.toast(e instanceof ApiError ? e.message : "Gagal mengekspor bukti", "danger");
+    }
+  }
+  if (t.peer === "mismatch" || t.peer === "badkey") {
+    return (
+      <div className="banner danger" role="alert" style={{ borderRadius: 10 }}>
+        <Icon name="alert" />
+        <div className="grow small">
+          <strong>{t.peer === "mismatch" ? "Catatan tidak cocok dengan lawan." : `Kunci tanda tangan ${peerAlias} berubah.`}</strong>{" "}
+          {t.peer === "mismatch" ? "Kuitansi yang kalian lihat berbeda — jangan lanjutkan pembayaran dan simpan bukti untuk moderator." : "Catatannya tidak dihitung sampai kamu menerima perubahan kunci di chat."}
+          <div className="actions">
+            <button className="btn small" onClick={() => void save()}>
+              Ekspor bukti
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <span className="tiny row" style={{ gap: 6, color: t.peer === "ok" ? "var(--arwah)" : "var(--muted)", flexWrap: "wrap" }} title="Buku Jejak Transaksi: setiap perubahan status dicatat & ditandatangani perangkat kedua pihak">
+      <Icon name={t.peer === "ok" ? "shieldCheck" : "clock"} size={12} />
+      {t.peer === "ok" ? `Buku Jejak: 3 tanda tangan cocok (notaris + kamu + ${peerAlias})` : `Buku Jejak: notaris + kamu · menunggu ${peerAlias}`}
+      <button className="btn ghost small" onClick={() => void save()} aria-label="Ekspor bukti transaksi">
+        Ekspor bukti
+      </button>
     </span>
   );
 }

@@ -8,6 +8,7 @@ import {
   generateSeed,
   identityFromSeed,
   localKeysFromSeed,
+  signIdentityFromSeed,
   unwrapSeed,
   wrapSeed,
 } from "../../../shared/vault.ts";
@@ -25,7 +26,8 @@ export type DeviceOpen =
 /** Buka kunci yang sudah terbuka, atau brankas dengan passphrase. */
 export async function openDevice(me: Me, passphrase: string | null): Promise<DeviceOpen> {
   const unlocked = await keystore.getUnlocked(me.id);
-  if (unlocked) {
+  // Perangkat terbuka dari versi lama (tanpa kunci tanda tangan) dianggap terkunci → masuk ulang membuatnya.
+  if (unlocked?.sign) {
     keystore.use(me.id, unlocked);
     return { t: "ready", device: unlocked, justSetUp: false };
   }
@@ -47,7 +49,7 @@ async function finish(me: Me, seed: Uint8Array<ArrayBuffer>, passphrase: string 
     const identity = await identityFromSeed(seed);
     const keys = await localKeysFromSeed(seed, me.id);
     if (passphrase !== null) await keystore.putVault(me.id, await wrapSeed(seed, passphrase, me.id));
-    const device: UnlockedDevice = { ...identity, ...keys };
+    const device: UnlockedDevice = { ...identity, ...keys, sign: await signIdentityFromSeed(seed) };
     await keystore.putUnlocked(me.id, device);
     keystore.use(me.id, keys);
     await migrate(me.id);

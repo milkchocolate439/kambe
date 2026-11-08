@@ -52,7 +52,8 @@ import {
 import { api, ApiError } from "./api.ts";
 import { keystore, type LocalMessage, type PinnedKey, type UnlockedDevice } from "./keystore.ts";
 import { BACKUP_MAX_BYTES, decryptBackup, encryptBackup } from "../../../shared/vault.ts";
-import { parseReceipt, verifyReceipt } from "../../../shared/receipt.ts";
+import { parseReceipt, receiptHash, verifyReceipt, type ReceiptBody, type SignedReceipt } from "../../../shared/receipt.ts";
+import { comparePeerEntry, parseTxEntry, signTxEntry, TXLOG_KIND, txEntryHash, verifyTxEntry, type SignedTxEntry, type TxEntryBody, type TxEvidence } from "../../../shared/txlog.ts";
 import { addRecipients, cleanDisplayText, openSealed, seal, type Recipient, type SealedKind, type SealedView } from "../../../shared/sealed.ts";
 import {
   NOTE_MAX,
@@ -101,6 +102,22 @@ export interface CtlMessage {
 }
 const isCtl = (m: ChatMessage | CtlMessage): m is CtlMessage => m.kind === "ctl";
 const newId = () => crypto.randomUUID().replace(/-/g, "");
+
+/** Status Buku Jejak Transaksi satu kesepakatan, untuk ditampilkan di kartu. */
+export interface TxStatus {
+  /** Nomor kuitansi notaris terbaru yang sudah kucatat. */
+  seq: number;
+  /** pending = lawan belum menandatangani; ok = tiga tanda tangan cocok; mismatch = kuitansi yang kami lihat BERBEDA; badkey = kunci tanda tangan lawan tidak sama dengan yang dipin. */
+  peer: "pending" | "ok" | "mismatch" | "badkey";
+}
+
+/** Catatan lokal terenkripsi satu kesepakatan (rahasia `txlog:<dealId>` di brankas). */
+interface TxRecord {
+  peerId: string;
+  mine: Record<number, { entry: SignedTxEntry; receiptHash: string; status: ReceiptBody["status"]; price: number; fee: number; sent: boolean }>;
+  peer: Record<number, { entry: SignedTxEntry; state: "pending" | "ok" | "mismatch" }>;
+  badKey?: boolean;
+}
 
 /** Etalase Hantu milikku (terenkripsi di brankas perangkat; hangus 72 jam). */
 export interface GhostStoreData {
@@ -185,6 +202,8 @@ export interface State {
   ghostStore: GhostStoreData | null;
   ghostViews: Record<string, GhostView>;
   ghostOrders: Record<string, GhostOrder>;
+  // Buku Jejak Transaksi
+  txlog: Record<string, TxStatus>;
 }
 
 const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3, X: 1 };
@@ -263,6 +282,7 @@ export class Messenger {
       ghostStore: null,
       ghostViews: {},
       ghostOrders: {},
+      txlog: {},
     };
     this.rt = new Realtime(
       (ev) => void this.onEvent(ev),
@@ -303,6 +323,7 @@ export class Messenger {
 
   async start() {
     await this.setupDevice();
+    if (this.state.device === "ok") await this.ensureSignKey().catch(() => {});
     this.rt.start();
     await Promise.all([this.refreshContacts(), this.loadMyStore(), this.loadConfig()]);
     document.addEventListener("visibilitychange", this.onVisible);
@@ -345,6 +366,7 @@ export class Messenger {
     this.keyCache.clear();
     this.set({ me, device: "ok", threads: {} });
     if (this.state.activePeer) await this.loadThread(this.state.activePeer);
+    await this.ensureSignKey().catch(() => {});
     this.toast("Perangkat ini aktif lagi. Kontakmu akan melihat safety number baru.", "ok");
   }
 
@@ -599,6 +621,7 @@ export class Messenger {
     if (!key) return;
     const pin: PinnedKey = { publicKey: key, verified: false, firstSeen: Date.now() };
     await keystore.putPin(this.state.me.id, peer, pin);
+    await this.forgetSignPin(peer);
     const { [peer]: _, ...rest } = this.state.keyAlerts;
     this.set({ pins: { ...this.state.pins, [peer]: pin }, keyAlerts: rest });
     void this.loadThread(peer);
@@ -834,6 +857,7 @@ export class Messenger {
       }
       if (body.seq > seen) await keystore.putSecret(owner, `receipt:${deal.id}`, body.seq);
       out[deal.id] = { state: "ok", seq: body.seq };
+      void this.recordTx(deal, body, await receiptHash(deal.receipt)).catch(() => {}); // Buku Jejak: tanda tangan perangkat atas kuitansi yang sah
     }
     this.set({ receipts: { ...this.state.receipts, ...out } });
   }
@@ -1150,6 +1174,125 @@ export class Messenger {
     if (msg.kind === "text" || msg.kind === "identity") void this.send(peer, { kind: msg.kind, text: msg.text });
   }
 
+  // -------------------------------------- Buku Jejak Transaksi (3 ttd) ---
+  // Tiap kuitansi notaris yang LOLOS verifikasi dicatat sebagai entri bertanda tangan perangkat ini
+  // (Ed25519 dari frasa kunci), dirantai (prev), disimpan terenkripsi, dan dikirim ke lawan lewat E2EE.
+  // Entri lawan diverifikasi (tanda tangan + kunci yang dipin) lalu dicocokkan dengan kuitansi yang
+  // kulihat. Cocok = tiga tanda tangan (notaris + aku + lawan). Beda = ditandai & bisa diekspor —
+  // TIDAK otomatis jadi sengketa (lihat shared/txlog.ts).
+
+  private txChain: Promise<unknown> = Promise.resolve();
+  /** Serialkan semua tulis-baca catatan agar entri yang datang bersamaan tidak saling menimpa. */
+  private txSerial<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.txChain.then(fn, fn);
+    this.txChain = run.catch(() => {});
+    return run;
+  }
+
+  private async ensureSignKey() {
+    const mine = this.device.sign.publicKey;
+    if (this.state.me.signKey === mine) return;
+    const { me } = await api<{ me: Me }>("PUT", "/api/me/sign-key", { signKey: mine });
+    this.set({ me });
+  }
+
+  private txKey = (dealId: string) => `txlog:${dealId}`;
+
+  private async getTx(dealId: string): Promise<TxRecord | undefined> {
+    return keystore.getSecret<TxRecord>(this.state.me.id, this.txKey(dealId));
+  }
+
+  /** Pin kunci tanda tangan lawan (TOFU), terpisah dari pin kunci E2EE. */
+  private async signPins(): Promise<Record<string, string>> {
+    return (await keystore.getSecret<Record<string, string>>(this.state.me.id, "signpins")) ?? {};
+  }
+
+  private async forgetSignPin(peer: string) {
+    const pins = await this.signPins();
+    if (!(peer in pins)) return;
+    delete pins[peer];
+    await keystore.putSecret(this.state.me.id, "signpins", pins);
+  }
+
+  private evalPeer(rec: TxRecord, seq: number) {
+    const m = rec.mine[seq];
+    const p = rec.peer[seq];
+    if (!m || !p) return;
+    p.state = comparePeerEntry({ status: m.status, price: m.price, fee: m.fee, receiptHash: m.receiptHash }, parseTxEntry(p.entry));
+  }
+
+  private publishTx(dealId: string, rec: TxRecord) {
+    const seqs = Object.keys(rec.mine).map(Number);
+    if (!seqs.length) return;
+    const seq = Math.max(...seqs);
+    const peers = Object.values(rec.peer);
+    const peer: TxStatus["peer"] = rec.badKey ? "badkey" : peers.some((p) => p.state === "mismatch") ? "mismatch" : rec.peer[seq]?.state === "ok" ? "ok" : "pending";
+    this.set({ txlog: { ...this.state.txlog, [dealId]: { seq, peer } } });
+  }
+
+  private recordTx(deal: Deal, body: ReceiptBody, rHash: string) {
+    return this.txSerial(async () => {
+      const me = this.state.me.id;
+      const peer = deal.buyerId === me ? deal.sellerId : deal.buyerId;
+      const rec: TxRecord = (await this.getTx(deal.id)) ?? { peerId: peer, mine: {}, peer: {} };
+      if (!rec.mine[body.seq]) {
+        const earlier = Object.keys(rec.mine).map(Number).filter((n) => n < body.seq);
+        const prev = earlier.length ? await txEntryHash(rec.mine[Math.max(...earlier)].entry) : "";
+        const eb: TxEntryBody = { v: 1, kind: TXLOG_KIND, dealId: deal.id, seq: body.seq, status: body.status, price: body.price, fee: body.fee, receiptHash: rHash, signer: me, at: Date.now(), prev };
+        const entry = await signTxEntry(this.device.sign.privateKey, this.device.sign.publicKey, eb);
+        rec.mine[body.seq] = { entry, receiptHash: rHash, status: body.status, price: body.price, fee: body.fee, sent: false };
+      }
+      this.evalPeer(rec, body.seq);
+      // Kirim yang belum terkirim (juga yang tertunda karena lawan sempat offline/kunci berubah).
+      for (const [seq, m] of Object.entries(rec.mine)) {
+        if (!m.sent && (await this.sendCtl(peer, { t: "txlog.entry", entry: m.entry }))) rec.mine[Number(seq)].sent = true;
+      }
+      await keystore.putSecret(me, this.txKey(deal.id), rec);
+      this.publishTx(deal.id, rec);
+    });
+  }
+
+  private async receiveTxEntry(peer: string, entry: SignedTxEntry) {
+    const eb = parseTxEntry(entry);
+    if (eb.signer !== peer) return;
+    // Hanya entri untuk kesepakatan yang memang melibatkan kami berdua.
+    if (!this.state.deals[peer]?.some((d) => d.id === eb.dealId)) await this.loadDeals(peer);
+    const deal = this.state.deals[peer]?.find((d) => d.id === eb.dealId);
+    if (!deal) return;
+    return this.txSerial(async () => {
+      const me = this.state.me.id;
+      const c = this.contact(peer);
+      if (!c?.signKey) return;
+      const pins = await this.signPins();
+      if (!pins[peer]) {
+        pins[peer] = c.signKey;
+        await keystore.putSecret(me, "signpins", pins);
+      }
+      const rec: TxRecord = (await this.getTx(deal.id)) ?? { peerId: peer, mine: {}, peer: {} };
+      if (entry.signKey !== pins[peer] || c.signKey !== pins[peer]) {
+        // Kunci tanda tangan lawan tidak sama dengan yang dipercaya: jangan hitung sebagai tanda tangan sah.
+        rec.badKey = true;
+      } else if (await verifyTxEntry(entry)) {
+        if (eb.seq > 64 || (rec.peer[eb.seq] && rec.peer[eb.seq].entry.body !== entry.body)) return; // satu entri per seq; yang berbeda diabaikan
+        rec.peer[eb.seq] = rec.peer[eb.seq] ?? { entry, state: "pending" };
+        this.evalPeer(rec, eb.seq);
+      } else {
+        return;
+      }
+      await keystore.putSecret(me, this.txKey(deal.id), rec);
+      this.publishTx(deal.id, rec);
+    });
+  }
+
+  /** Berkas bukti (kuitansi notaris + entri bertanda tangan kedua pihak) untuk diberikan ke moderator. */
+  async exportTxEvidence(dealId: string): Promise<Blob> {
+    const rec = await this.getTx(dealId);
+    if (!rec) throw new ApiError(404, "no_log", "Belum ada catatan untuk kesepakatan ini");
+    const { receipts } = await api<{ receipts: SignedReceipt[] }>("GET", `/api/deals/${dealId}/receipts`);
+    const ev: TxEvidence = { v: 1, dealId, receipts, entries: [...Object.values(rec.mine).map((m) => m.entry), ...Object.values(rec.peer).map((p) => p.entry)] };
+    return new Blob([JSON.stringify(ev, null, 2)], { type: "application/json" });
+  }
+
   // ------------------------------------------------ Etalase Hantu (E2EE) ---
   // Katalog tinggal di HP penjual (terenkripsi di brankas, hangus 72 jam). Pembeli memintanya lewat
   // pesan kendali E2EE; HP penjual menjawab sendiri. Pembeli hanya menyimpannya di memori.
@@ -1191,6 +1334,8 @@ export class Messenger {
         this.setGhostView(peer, { state: "ready", reqId: col.reqId, items: activeItems(col.items(), Date.now()), storeExpiresAt: col.storeExpiresAt });
         return;
       }
+      case "txlog.entry":
+        return this.receiveTxEntry(peer, ctl.entry);
       case "store.nack": {
         const o = this.state.ghostOrders[ctl.orderId];
         if (!o || o.peer !== peer) return;

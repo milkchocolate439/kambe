@@ -111,6 +111,29 @@ export async function identityFromSeed(seed: Uint8Array<ArrayBuffer>): Promise<I
   return { privateKey, publicKey };
 }
 
+// PKCS#8 untuk Ed25519: SEQUENCE { INTEGER 0, SEQUENCE { OID 1.3.101.112 }, OCTET STRING { OCTET STRING (32) } }
+const PKCS8_ED25519 = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
+
+/** Kunci tanda tangan Buku Jejak Transaksi (Ed25519), diturunkan deterministik dari seed dengan label HKDF TERSENDIRI. */
+export interface SignIdentity {
+  privateKey: CryptoKey; // non-extractable
+  publicKey: string; // base64 raw 32 byte
+}
+
+export async function signIdentityFromSeed(seed: Uint8Array<ArrayBuffer>): Promise<SignIdentity> {
+  const d = await hkdf(seed, "device-sign-ed25519"); // label baru; label identitas/riwayat/cadangan tidak berubah
+  const pkcs8 = new Uint8Array(PKCS8_ED25519.length + 32);
+  pkcs8.set(PKCS8_ED25519);
+  pkcs8.set(d, PKCS8_ED25519.length);
+  const tmp = await subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, true, ["sign"]);
+  const jwk = await subtle.exportKey("jwk", tmp);
+  const publicKey = toB64(fromB64url(jwk.x!));
+  const privateKey = await subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+  pkcs8.fill(0);
+  d.fill(0);
+  return { privateKey, publicKey };
+}
+
 function fromB64url(s: string): Uint8Array<ArrayBuffer> {
   const b = s.replace(/-/g, "+").replace(/_/g, "/");
   return fromB64(b + "=".repeat((4 - (b.length % 4)) % 4));
