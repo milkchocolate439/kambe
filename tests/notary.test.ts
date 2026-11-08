@@ -9,6 +9,7 @@ import { parseReceipt, verifyChain, verifyReceipt, type SignedReceipt } from "..
 import { sealedHash } from "../shared/sealed.ts";
 import { createNotary, loadNotaryKey } from "../server/notary.ts";
 import { createApp } from "../server/app.ts";
+import { createNotary as makeNotary, notaryKeyFromSeed } from "../server/notary.ts";
 
 const key = () => crypto.randomUUID().replace(/-/g, "");
 
@@ -119,4 +120,15 @@ test("kunci notaris permanen: dibuat sekali dengan izin 0600 dan dimuat ulang id
   const envB64 = fromEnv.export({ format: "der", type: "pkcs8" }).toString("base64");
   assert.equal(createNotary(loadNotaryKey(envB64, path)).publicKey, createNotary(fromEnv).publicKey);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("kunci notaris dari seed: stabil untuk seed yang sama, berbeda untuk seed lain, seed pendek ditolak", async () => {
+  const seed = "x".repeat(16) + "seed-rahasia-acak-panjang-1234567890";
+  const a = makeNotary(notaryKeyFromSeed(seed));
+  const b = makeNotary(notaryKeyFromSeed(seed));
+  assert.equal(a.publicKey, b.publicKey, "restart/disk hilang → kunci publik notaris sama");
+  assert.notEqual(a.publicKey, makeNotary(notaryKeyFromSeed(seed + "!")).publicKey);
+  assert.throws(() => notaryKeyFromSeed("pendek"), /minimal 32/);
+  const body = JSON.stringify({ hello: "kambe" });
+  assert.equal(await verifyReceipt(a.publicKey, { body, sig: b.signBody(body) }), true, "tanda tangan dari seed sah");
 });

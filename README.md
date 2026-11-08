@@ -36,6 +36,7 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 | `KAMBE_FEE_PER_MILLE` | `0` | Fee platform per seribu (**default 0 = escrow gratis**; 25 = 2,5%; 50 = 5%; maks. 200). Tersimpan per kesepakatan saat dibuat; fee 0 = invoice gateway tanpa split rule |
 | `KAMBE_NOTARY_KEY` / `KAMBE_NOTARY_KEY_FILE` | `data/notary.key` | Kunci privat Ed25519 notaris kuitansi (server-only; dibuat otomatis, izin 0600) |
 | `KAMBE_PAYMENT_PROVIDER` | `langsung` | **`langsung`** = pembeli mentransfer sendiri ke info pembayaran penjual, KAMBE tidak memegang dana (boleh di produksi). `simulasi` = rekber tiruan (dev/tes saja). `xendit` = gateway nyata (disimpan; butuh `XENDIT_SECRET_KEY`, `XENDIT_CALLBACK_TOKEN`, `KAMBE_PUBLIC_URL`) |
+| `KAMBE_NOTARY_SEED` | – | Seed rahasia (≥ 32 karakter) untuk kunci notaris deterministik — untuk hosting tanpa disk persisten (dipakai Blueprint Render paket gratis) |
 | `KAMBE_FREE_PLATFORM` | `1` | Platform gratis sepenuhnya (semua fitur PRO terbuka, langganan dimatikan). `0` = alur PRO lama |
 | `KAMBE_PUBLIC_URL` | – | Alamat publik aplikasi (tujuan kembali setelah bayar di gateway) |
 | `KAMBE_SERVE_DIST` | – | Khusus uji: `1` + `NODE_ENV=test` = sajikan `dist/` dengan pembayaran simulasi. Di mode lain server menolak start. **Jangan dipakai untuk deployment** (pakai `NODE_ENV=production`) |

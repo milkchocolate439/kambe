@@ -1,19 +1,22 @@
 # Blueprint Render untuk KAMBE (satu layanan web: API + WebSocket + tampilan dari dist/).
-# Database SQLite & kunci notaris tinggal di disk persisten /var/data (data tetap ada saat deploy/restart).
+#
+# Paket FREE (sementara, tanpa kartu): TANPA disk persisten — database SQLite ikut terhapus saat server
+# tidur (15 menit sepi), restart, atau deploy. Kunci notaris tetap stabil karena diturunkan dari
+# KAMBE_NOTARY_SEED (dibuat acak oleh Render sekali, disimpan sebagai variabel lingkungan).
+#
+# Naik ke paket berbayar dengan data permanen: ganti `plan: starter`, tambahkan
+#   disk: { name: kambe-data, mountPath: /var/data, sizeGB: 1 }
+# dan variabel KAMBE_DB=/var/data/kambe.db.
 services:
   - type: web
     name: kambe
     runtime: node
     region: singapore
-    plan: starter
+    plan: free
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
     startCommand: pnpm start
     healthCheckPath: /api/config
     autoDeploy: true
-    disk:
-      name: kambe-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: "24"
@@ -23,10 +26,8 @@ services:
         value: "1"
       - key: KAMBE_TRUST_PROXY
         value: "1"
-      - key: KAMBE_DB
-        value: /var/data/kambe.db
-      - key: KAMBE_NOTARY_KEY_FILE
-        value: /var/data/notary.key
+      - key: KAMBE_NOTARY_SEED
+        generateValue: true
       # Default produk (ditulis eksplisit agar jelas): gratis + pembayaran langsung antarpengguna.
       - key: KAMBE_PAYMENT_PROVIDER
         value: langsung

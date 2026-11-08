@@ -1,7 +1,7 @@
 // Notaris kuitansi: memegang kunci privat Ed25519 developer — HANYA di server, tidak pernah di ponsel.
 // Kunci dimuat dari KAMBE_NOTARY_KEY (nama lama PINPATH_NOTARY_KEY masih diterima; PKCS8 base64) atau berkas data/notary.key (dibuat sekali, izin 0600).
 
-import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -31,4 +31,18 @@ export function loadNotaryKey(envValue: string | undefined, path: string): KeyOb
   writeFileSync(path, privateKey.export({ format: "pem", type: "pkcs8" }), { mode: 0o600 });
   chmodSync(path, 0o600);
   return privateKey;
+}
+
+// PKCS#8 Ed25519: SEQUENCE { INTEGER 0, SEQUENCE { OID 1.3.101.112 }, OCTET STRING { OCTET STRING (32) } }
+const PKCS8_ED25519 = Buffer.from("302e020100300506032b657004220420", "hex");
+
+/**
+ * Kunci notaris deterministik dari seed rahasia (KAMBE_NOTARY_SEED). Dipakai di hosting tanpa disk
+ * persisten (mis. paket gratis): seed tersimpan sebagai variabel lingkungan, jadi kunci publik notaris
+ * TIDAK berubah walau disk terhapus — HP pengguna tidak melihat peringatan "kunci notaris berbeda".
+ */
+export function notaryKeyFromSeed(seed: string): KeyObject {
+  if (seed.length < 32) throw new Error("KAMBE_NOTARY_SEED minimal 32 karakter acak");
+  const d = createHash("sha256").update(`kambe-notary-seed|${seed}`).digest();
+  return createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, d]), format: "der", type: "pkcs8" });
 }

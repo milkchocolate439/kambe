@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createApp } from "./app.ts";
 import { defaultDbPath, readEnv, staticDirFor } from "./env.ts";
-import { loadNotaryKey } from "./notary.ts";
+import { loadNotaryKey, notaryKeyFromSeed } from "./notary.ts";
 import { directProvider, simulatedProvider, xenditProvider, type PaymentProvider } from "./payments.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -47,7 +47,10 @@ const app = createApp({
   moderators: readEnv(env, "MODERATORS")?.split(",").map((s) => s.trim()).filter(Boolean),
   // Kunci notaris permanen: dari env (PKCS8 base64) atau data/notary.key (dibuat sekali, izin 0600).
   // Jangan pernah dikirim ke klien; yang dibagikan hanya kunci publiknya (/api/config).
-  notaryKey: loadNotaryKey(readEnv(env, "NOTARY_KEY"), readEnv(env, "NOTARY_KEY_FILE") ?? join(root, "data", "notary.key")),
+  // Urutan: KAMBE_NOTARY_KEY (PKCS8) → KAMBE_NOTARY_SEED (hosting tanpa disk) → berkas data/notary.key.
+  notaryKey: readEnv(env, "NOTARY_KEY") || !readEnv(env, "NOTARY_SEED")
+    ? loadNotaryKey(readEnv(env, "NOTARY_KEY"), readEnv(env, "NOTARY_KEY_FILE") ?? join(root, "data", "notary.key"))
+    : notaryKeyFromSeed(readEnv(env, "NOTARY_SEED")!),
   feePerMille: feePerMille ? Number(feePerMille) : undefined,
   payments: paymentProvider(),
   // Platform gratis sepenuhnya kecuali dimatikan eksplisit (KAMBE_FREE_PLATFORM=0).
