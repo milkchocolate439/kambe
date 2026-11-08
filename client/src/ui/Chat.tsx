@@ -3,6 +3,7 @@ import type { ChatMessage } from "../lib/messenger.ts";
 import { ApiError } from "../lib/api.ts";
 import { Avatar, dayOf, Modal, timeOf, useMessenger } from "./common.tsx";
 import { CatalogModal, DealCard, OfferModal, StoreModal } from "./Commerce.tsx";
+import { GhostStoreModal } from "./GhostStore.tsx";
 import { Icon } from "./icons.tsx";
 import type { Deal } from "../../../shared/protocol.ts";
 
@@ -34,7 +35,7 @@ export function Chat() {
   const [text, setText] = useState("");
   const [safety, setSafety] = useState(false);
   const [menu, setMenu] = useState<null | "menu" | "remove" | "block">(null);
-  const [shop, setShop] = useState<null | "catalog" | "offer" | "upgrade">(null);
+  const [shop, setShop] = useState<null | "catalog" | "offer" | "upgrade" | "ghost">(null);
   const [shake, setShake] = useState(false);
   const [emoji, setEmoji] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -336,6 +337,7 @@ export function Chat() {
 
       {safety && <SafetyModal peer={peer} onClose={() => setSafety(false)} />}
       {shop === "catalog" && <CatalogModal peer={peer} peerAlias={contact.alias} onClose={() => setShop(null)} />}
+      {shop === "ghost" && <GhostStoreModal peer={peer} peerAlias={contact.alias} onClose={() => setShop(null)} />}
       {shop === "offer" && <OfferModal peer={peer} peerAlias={contact.alias} onClose={() => setShop(null)} />}
       {shop === "upgrade" && <StoreModal initial="pro" onClose={() => setShop(null)} />}
 
@@ -394,6 +396,9 @@ export function Chat() {
             </div>
             <button className="btn block" onClick={() => { setMenu(null); setSearching(true); }}>
               <Icon name="search" /> Cari pesan dalam chat
+            </button>
+            <button className="btn block" onClick={() => { setMenu(null); setShop("ghost"); }}>
+              <Icon name="mask" /> Etalase Hantu (72 jam)
             </button>
             <button className="btn block" onClick={() => { setMenu(null); setSafety(true); }}>
               <Icon name="shieldCheck" /> Verifikasi safety number

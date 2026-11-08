@@ -124,6 +124,7 @@ export type Payload =
   | { kind: "text"; text: string }
   | { kind: "ping" }
   | { kind: "identity"; text: string } // identitas asli yang dibuka sukarela
+  | { kind: "ctl"; ctl: unknown } // pesan kendali antar-perangkat (Etalase Hantu); divalidasi ketat di shared/ctl.ts
   | { kind: "moment"; type: MomentType; text: string }; // Path Moment (hanya di saluran "moment")
 
 /**
@@ -173,6 +174,7 @@ function validatePayload(p: unknown, channel: Channel): Payload {
       }
     } else {
       if (o.kind === "ping") return { kind: "ping" };
+      if (o.kind === "ctl" && typeof o.ctl === "object" && o.ctl !== null) return { kind: "ctl", ctl: o.ctl };
       if ((o.kind === "text" || o.kind === "identity") && typeof o.text === "string") return { kind: o.kind, text: o.text };
     }
   }

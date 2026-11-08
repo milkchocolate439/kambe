@@ -33,6 +33,22 @@ import {
   type StoredMessage,
   type Wallet,
 } from "../../../shared/protocol.ts";
+import {
+  activeItems,
+  chunkItems,
+  CtlError,
+  GHOST_MAX_ITEMS,
+  GHOST_ORDER_PER_HOUR,
+  GHOST_REQ_PER_HOUR,
+  GHOST_TTL_MS,
+  PartCollector,
+  SlidingLimiter,
+  validateCtl,
+  validateItem,
+  type Ctl,
+  type GhostItem,
+  type NackReason,
+} from "../../../shared/ctl.ts";
 import { api, ApiError } from "./api.ts";
 import { keystore, type LocalMessage, type PinnedKey, type UnlockedDevice } from "./keystore.ts";
 import { BACKUP_MAX_BYTES, decryptBackup, encryptBackup } from "../../../shared/vault.ts";
@@ -73,6 +89,37 @@ export interface ChatMessage {
   error?: string;
   /** Kunci pengirim bukan kunci yang kita pin — kemungkinan penyusupan. */
   untrusted?: boolean;
+}
+
+/** Pesan kendali E2EE (Etalase Hantu): tidak pernah masuk linimasa chat maupun disimpan di riwayat. */
+export interface CtlMessage {
+  kind: "ctl";
+  id: string;
+  mine: boolean;
+  createdAt: number;
+  ctl: unknown;
+}
+const isCtl = (m: ChatMessage | CtlMessage): m is CtlMessage => m.kind === "ctl";
+const newId = () => crypto.randomUUID().replace(/-/g, "");
+
+/** Etalase Hantu milikku (terenkripsi di brankas perangkat; hangus 72 jam). */
+export interface GhostStoreData {
+  items: GhostItem[];
+}
+
+/** Etalase lawan: HANYA di memori selama jendela terbuka. */
+export interface GhostView {
+  state: "loading" | "ready" | "offline";
+  reqId: string;
+  items: GhostItem[];
+  storeExpiresAt: number;
+}
+
+export interface GhostOrder {
+  peer: string;
+  itemId: string;
+  state: "sent" | "done" | "nack";
+  reason?: NackReason;
 }
 
 export interface Thread {
@@ -134,6 +181,10 @@ export interface State {
   config: PublicConfig | null;
   notaryAlert: string | null;
   receipts: Record<string, ReceiptCheck>;
+  // Etalase Hantu
+  ghostStore: GhostStoreData | null;
+  ghostViews: Record<string, GhostView>;
+  ghostOrders: Record<string, GhostOrder>;
 }
 
 const RANK: Record<MsgStatus, number> = { failed: -1, pending: 0, S: 1, D: 2, R: 3, X: 1 };
@@ -209,6 +260,9 @@ export class Messenger {
       config: null,
       notaryAlert: null,
       receipts: {},
+      ghostStore: null,
+      ghostViews: {},
+      ghostOrders: {},
     };
     this.rt = new Realtime(
       (ev) => void this.onEvent(ev),
@@ -401,6 +455,25 @@ export class Messenger {
     this.set({ contacts, incoming: data.incoming, outgoing: data.outgoing, pins, keyAlerts });
     if (this.state.activePeer && !contacts.some((c) => c.id === this.state.activePeer)) this.set({ activePeer: null });
     void this.syncShares();
+    void this.drainPending(contacts);
+  }
+
+  /**
+   * Zero-click: pesan (termasuk pesan kendali etalase) yang menunggu di relay saat kita offline diambil
+   * sekali per kontak tanpa harus membuka chat-nya, supaya permintaan etalase tetap terlayani.
+   */
+  private draining = new Set<string>();
+  private async drainPending(contacts: Contact[]) {
+    if (this.state.device !== "ok") return;
+    for (const c of contacts) {
+      if (c.unread <= 0 || this.state.threads[c.id]?.loaded || this.draining.has(c.id)) continue;
+      this.draining.add(c.id);
+      try {
+        await this.loadThread(c.id);
+      } finally {
+        this.draining.delete(c.id);
+      }
+    }
   }
 
   contact(peer: string) {
@@ -581,7 +654,7 @@ export class Messenger {
     return k;
   }
 
-  private async decrypt(m: StoredMessage): Promise<ChatMessage> {
+  private async decrypt(m: StoredMessage): Promise<ChatMessage | CtlMessage> {
     const meId = this.state.me.id;
     const mine = m.from === meId;
     const peer = mine ? m.to : m.from;
@@ -597,6 +670,8 @@ export class Messenger {
       const env: Envelope = { id: m.id, from: { id: m.from, publicKey: m.fromKey }, to: { id: m.to, publicKey: m.toKey } };
       const p = await decryptPayload(await this.conversationKey(myKey, peer, peerKey), env, m.nonce, m.ciphertext);
       if (p.kind === "moment") throw new E2EEError("bad_payload", "Format pesan tidak dikenal"); // mustahil di saluran "msg"; jaga-jaga
+      // Pesan kendali dari kunci yang belum diakui = tidak diproses (bisa jadi penyusup).
+      if (p.kind === "ctl") return { kind: "ctl", id: m.id, mine, createdAt: m.createdAt, ctl: untrusted ? null : p.ctl };
       return { ...base, kind: p.kind, text: p.kind === "ping" ? "" : p.text, untrusted };
     } catch (e) {
       return { ...base, kind: "broken", text: "", error: e instanceof E2EEError ? e.message : "Pesan tidak bisa dibuka", untrusted };
@@ -1001,10 +1076,17 @@ export class Messenger {
     });
     try {
       const { pending, statuses } = await api<{ pending: StoredMessage[]; statuses: { id: string; status: MsgStatus }[] }>("GET", `/api/messages/${peer}`);
-      const decrypted = await Promise.all(pending.map((m) => this.decrypt(m)));
+      const all = await Promise.all(pending.map((m) => this.decrypt(m)));
+      const decrypted = all.filter((m): m is ChatMessage => !isCtl(m));
+      const ctls = all.filter(isCtl).filter((c) => !c.mine);
       for (const msg of decrypted) this.upsert(peer, msg, false);
       await keystore.putMessages(decrypted.map((m) => this.toLocal(peer, m)));
       if (decrypted.length) this.rt.send({ t: "delivered", ids: decrypted.map((m) => m.id) });
+      // Pesan kendali: tandai dibaca (relay menghapus ciphertext-nya) lalu proses — tanpa jejak di chat.
+      if (ctls.length) {
+        this.rt.send({ t: "read", peer, ids: ctls.map((c) => c.id) });
+        for (const c of ctls) void this.handleCtl(peer, c.ctl);
+      }
       for (const s of statuses) this.patchStatus([s.id], s.status);
       this.setThread(peer, (t) => ({ ...t, loading: false }));
       if (this.state.activePeer === peer) this.markRead(peer);
@@ -1034,7 +1116,7 @@ export class Messenger {
     return null;
   }
 
-  async send(peer: string, payload: Exclude<Payload, { kind: "moment" }>): Promise<boolean> {
+  async send(peer: string, payload: Exclude<Payload, { kind: "moment" | "ctl" }>): Promise<boolean> {
     const blocker = this.sendBlocker(peer);
     if (blocker) {
       this.toast(blocker, "warn");
@@ -1068,6 +1150,190 @@ export class Messenger {
     if (msg.kind === "text" || msg.kind === "identity") void this.send(peer, { kind: msg.kind, text: msg.text });
   }
 
+  // ------------------------------------------------ Etalase Hantu (E2EE) ---
+  // Katalog tinggal di HP penjual (terenkripsi di brankas, hangus 72 jam). Pembeli memintanya lewat
+  // pesan kendali E2EE; HP penjual menjawab sendiri. Pembeli hanya menyimpannya di memori.
+  // Server tidak pernah melihat isi katalog; hanya ciphertext biasa lewat relay.
+
+  private reqLimiter = new SlidingLimiter(GHOST_REQ_PER_HOUR);
+  private orderLimiter = new SlidingLimiter(GHOST_ORDER_PER_HOUR);
+  private collectors = new Map<string, PartCollector>();
+
+  /** Kirim pesan kendali E2EE ke kontak (tanpa gelembung chat). */
+  private async sendCtl(peer: string, ctl: Ctl): Promise<boolean> {
+    if (this.sendBlocker(peer)) return false;
+    const c = this.contact(peer)!;
+    const myKey = this.identity!.publicKey;
+    const env: Envelope = { id: crypto.randomUUID(), from: { id: this.state.me.id, publicKey: myKey }, to: { id: c.id, publicKey: c.publicKey! } };
+    const box = await encryptPayload(await this.conversationKey(myKey, c.id, c.publicKey!), env, { kind: "ctl", ctl });
+    const ev = { t: "send" as const, id: env.id, to: c.id, fromKey: myKey, toKey: c.publicKey!, ...box, ping: false };
+    this.outbox.set(env.id, ev);
+    this.rt.send(ev);
+    return true;
+  }
+
+  private async handleCtl(peer: string, raw: unknown) {
+    let ctl: Ctl;
+    try {
+      ctl = validateCtl(raw);
+    } catch (e) {
+      if (!(e instanceof CtlError)) throw e;
+      return; // pesan kendali tidak sah dari lawan: diabaikan diam-diam
+    }
+    switch (ctl.t) {
+      case "store.req":
+        return this.serveStore(peer, ctl.reqId);
+      case "store.order":
+        return this.serveOrder(peer, ctl.orderId, ctl.itemId);
+      case "store.res": {
+        const col = this.collectors.get(peer);
+        if (!col || !col.add(ctl)) return;
+        this.setGhostView(peer, { state: "ready", reqId: col.reqId, items: activeItems(col.items(), Date.now()), storeExpiresAt: col.storeExpiresAt });
+        return;
+      }
+      case "store.nack": {
+        const o = this.state.ghostOrders[ctl.orderId];
+        if (!o || o.peer !== peer) return;
+        this.set({ ghostOrders: { ...this.state.ghostOrders, [ctl.orderId]: { ...o, state: "nack", reason: ctl.reason } } });
+        const why = { item_gone: "Barangnya sudah tidak tersedia.", seller_not_pro: "Penjual belum bisa menerima pembayaran rekber (butuh PRO).", failed: "Pesanan gagal diproses penjual. Coba lagi nanti." }[ctl.reason];
+        this.toast(why, "warn");
+      }
+    }
+  }
+
+  // ---- sisi penjual ----
+
+  async loadGhostStore(): Promise<GhostStoreData> {
+    const owner = this.state.me.id;
+    const raw = await keystore.getSecret<GhostStoreData>(owner, "ghost-store").catch(() => undefined);
+    const now = Date.now();
+    const list = Array.isArray(raw?.items) ? raw!.items : [];
+    const items: GhostItem[] = [];
+    for (const it of list) {
+      try {
+        const v = validateItem(it);
+        if (v.expiresAt > now) items.push(v);
+      } catch {
+        /* rekaman rusak dibuang */
+      }
+    }
+    const data = { items };
+    if (items.length !== list.length) await keystore.putSecret(owner, "ghost-store", data).catch(() => {});
+    this.set({ ghostStore: data });
+    return data;
+  }
+
+  private async saveGhostStore(items: GhostItem[]) {
+    const data = { items };
+    await keystore.putSecret(this.state.me.id, "ghost-store", data);
+    this.set({ ghostStore: data });
+  }
+
+  async addGhostItem(p: { title: string; description: string; price: number }) {
+    const store = await this.loadGhostStore();
+    if (store.items.length >= GHOST_MAX_ITEMS) throw new ApiError(409, "too_many_items", `Maksimal ${GHOST_MAX_ITEMS} barang di Etalase Hantu`);
+    let item: GhostItem;
+    try {
+      item = validateItem({ id: newId(), title: p.title, description: p.description, price: p.price, expiresAt: Date.now() + GHOST_TTL_MS });
+    } catch (e) {
+      throw new ApiError(400, "bad_item", e instanceof CtlError ? `Barang tidak valid: ${e.message}` : "Barang tidak valid");
+    }
+    await this.saveGhostStore([...store.items, item]);
+    return item;
+  }
+
+  async removeGhostItem(itemId: string) {
+    const store = await this.loadGhostStore();
+    await this.saveGhostStore(store.items.filter((i) => i.id !== itemId));
+  }
+
+  /** Perpanjang 72 jam dari sekarang (satu barang, atau semua bila id kosong). */
+  async extendGhostItems(itemId?: string) {
+    const store = await this.loadGhostStore();
+    const expiresAt = Date.now() + GHOST_TTL_MS;
+    await this.saveGhostStore(store.items.map((i) => (!itemId || i.id === itemId ? { ...i, expiresAt } : i)));
+  }
+
+  private async serveStore(peer: string, reqId: string) {
+    if (this.sendBlocker(peer) || !this.reqLimiter.take(peer)) return;
+    const store = await this.loadGhostStore();
+    const items = activeItems(store.items, Date.now());
+    const parts = chunkItems(items);
+    const storeExpiresAt = items.reduce((m, i) => Math.max(m, i.expiresAt), 0);
+    for (let part = 0; part < parts.length; part++) await this.sendCtl(peer, { t: "store.res", reqId, part, parts: parts.length, items: parts[part], storeExpiresAt });
+  }
+
+  /** Pesanan pembeli → tawaran rekber otomatis dengan harga dari katalog SENDIRI (bukan dari pembeli). */
+  private async serveOrder(peer: string, orderId: string, itemId: string) {
+    if (this.sendBlocker(peer)) return;
+    const nack = (reason: NackReason) => void this.sendCtl(peer, { t: "store.nack", orderId, reason });
+    if (!this.orderLimiter.take(peer)) return nack("failed");
+    const store = await this.loadGhostStore();
+    const item = activeItems(store.items, Date.now()).find((i) => i.id === itemId);
+    if (!item) return nack("item_gone");
+    if (!this.state.pro) await this.loadMyStore();
+    if (!this.state.pro?.active) return nack("seller_not_pro");
+    try {
+      await this.offerDeal(peer, item.title, item.price, orderId); // orderId = idempotencyKey: pesanan ganda tidak menggandakan kesepakatan
+      this.toast(`Pesanan "${item.title}" dari ${this.contact(peer)?.alias ?? "pembeli"} — tawaran rekber dikirim.`, "ok");
+    } catch {
+      nack("failed");
+    }
+  }
+
+  // ---- sisi pembeli ----
+
+  private setGhostView(peer: string, v: GhostView) {
+    this.set({ ghostViews: { ...this.state.ghostViews, [peer]: v } });
+  }
+
+  /** Minta etalase kontak. Jawaban datang lewat HP penjual; kalau tidak, dianggap offline setelah 20 detik. */
+  async requestGhostStore(peer: string): Promise<boolean> {
+    const blocker = this.sendBlocker(peer);
+    if (blocker) {
+      this.toast(blocker, "warn");
+      return false;
+    }
+    const reqId = newId();
+    this.collectors.set(peer, new PartCollector(reqId));
+    this.setGhostView(peer, { state: "loading", reqId, items: [], storeExpiresAt: 0 });
+    const sent = await this.sendCtl(peer, { t: "store.req", reqId });
+    setTimeout(() => {
+      const v = this.state.ghostViews[peer];
+      if (v && v.reqId === reqId && v.state === "loading") this.setGhostView(peer, { ...v, state: "offline" });
+    }, 20_000);
+    return sent;
+  }
+
+  /** Tutup etalase lawan: katalognya dibuang dari memori (tidak pernah disimpan permanen). */
+  clearGhostView(peer: string) {
+    this.collectors.delete(peer);
+    const { [peer]: _, ...rest } = this.state.ghostViews;
+    this.set({ ghostViews: rest });
+  }
+
+  async orderGhostItem(peer: string, itemId: string): Promise<boolean> {
+    const orderId = newId();
+    if (!(await this.sendCtl(peer, { t: "store.order", orderId, itemId }))) return false;
+    this.set({ ghostOrders: { ...this.state.ghostOrders, [orderId]: { peer, itemId, state: "sent" } } });
+    return true;
+  }
+
+  private markOrdersDone(peer: string) {
+    const orders = { ...this.state.ghostOrders };
+    let changed = false;
+    for (const [id, o] of Object.entries(orders)) {
+      if (o.peer === peer && o.state === "sent") {
+        orders[id] = { ...o, state: "done" };
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.set({ ghostOrders: orders });
+      this.toast("Tawaran rekber dari penjual masuk — cek chat untuk membayar.", "ok");
+    }
+  }
+
   // ------------------------------------------------------ event server ---
 
   private async onEvent(ev: ServerEvent) {
@@ -1077,6 +1343,14 @@ export class Messenger {
         const mine = m.from === this.state.me.id;
         const peer = mine ? m.to : m.from;
         const msg = await this.decrypt(m);
+        if (isCtl(msg)) {
+          // Pesan kendali: proses diam-diam (zero-click), jangan tampil di chat & jangan menambah "belum dibaca".
+          if (!mine) {
+            this.rt.send({ t: "read", peer, ids: [m.id] });
+            void this.handleCtl(peer, msg.ctl);
+          }
+          break;
+        }
         if (this.state.threads[peer]?.loaded || this.state.activePeer === peer) this.upsert(peer, msg, false);
         // Simpan di perangkat DULU; baru konfirmasi agar relay menghapus ciphertext (anti hilang).
         try {
@@ -1124,6 +1398,7 @@ export class Messenger {
         }
         break;
       case "deals_changed":
+        this.markOrdersDone(ev.peer);
         if (this.state.deals[ev.peer] || this.state.activePeer === ev.peer) await this.loadDeals(ev.peer);
         if (this.state.wallet) void this.loadWallet();
         break;
