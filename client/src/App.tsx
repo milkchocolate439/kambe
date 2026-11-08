@@ -4,6 +4,7 @@ import { api, ApiError } from "./lib/api.ts";
 import { createFresh, lockDevice, openDevice } from "./lib/device.ts";
 import type { UnlockedDevice } from "./lib/keystore.ts";
 import { Messenger } from "./lib/messenger.ts";
+import { WIPED_HASH, WIPED_SERVER_HASH } from "./lib/panic.ts";
 import { Auth, type AuthKind } from "./ui/Auth.tsx";
 import { MessengerContext } from "./ui/common.tsx";
 import { Shell } from "./ui/Shell.tsx";
@@ -84,11 +85,14 @@ export function App() {
 
   const boot = useCallback(async () => {
     setPhase({ t: "loading" });
+    // Setelah Panic Wipe: tampilkan pemberitahuan sekali lalu bersihkan penanda dari URL.
+    const wiped = location.hash === WIPED_HASH ? "Semua jejak KAMBE di perangkat ini sudah dihapus." : location.hash === WIPED_SERVER_HASH ? "Akunmu dan semua jejak di perangkat ini sudah dihapus." : null;
+    if (wiped) history.replaceState(null, "", location.pathname);
     let me: Me;
     try {
       ({ me } = await api<{ me: Me }>("GET", "/api/me"));
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) setPhase({ t: "auth", notice: null });
+      if (e instanceof ApiError && e.status === 401) setPhase({ t: "auth", notice: wiped });
       else setPhase({ t: "error", message: e instanceof Error ? e.message : "Gagal memuat" });
       return;
     }

@@ -6,6 +6,7 @@ import { Modal, Switch, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 import { Logo } from "./Logo.tsx";
 import { VaultPanel } from "./Vault.tsx";
+import { PanicWipeButton } from "./Panic.tsx";
 
 type Run = (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
 
@@ -165,6 +166,11 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
             </div>
           </div>
         )}
+
+        <div className="stack">
+          <PanicWipeButton />
+          <span className="hint">Menghapus brankas, kunci, riwayat, dan cache di perangkat ini, mencabut sesimu di server, lalu memuat ulang. Salinan di HP lawan bicara tidak ikut terhapus. Tanpa frasa kunci, riwayat tidak bisa dipulihkan.</span>
+        </div>
 
         {error && <div className="error" role="alert">{error}</div>}
 
