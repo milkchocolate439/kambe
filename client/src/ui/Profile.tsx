@@ -25,7 +25,7 @@ export function ContactProfile({ peer, onClose, actions }: { peer: string; onClo
 
   const rows: { icon: IconName; label: string; run: () => void; danger?: boolean }[] = [
     { icon: "fingerprint", label: "Nomor keamanan", run: actions.onSafety },
-    { icon: "mask", label: "Etalase Hantu (72 jam)", run: actions.onGhost },
+    { icon: "store", label: "Etalase", run: actions.onGhost },
     { icon: "search", label: "Cari pesan dalam chat", run: actions.onSearch },
     { icon: "trash", label: "Hapus kontak", run: actions.onRemove },
     { icon: "ban", label: "Blokir " + c.alias, run: actions.onBlock, danger: true },

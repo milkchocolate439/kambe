@@ -348,7 +348,7 @@ export function Chat() {
           onClose={() => setProfile(false)}
           actions={{
             onSafety: () => setSafety(true),
-            onGhost: () => setShop("ghost"),
+            onGhost: () => setShop("catalog"),
             onSearch: () => setSearching(true),
             onRemove: () => setMenu("remove"),
             onBlock: () => setMenu("block"),
@@ -416,9 +416,6 @@ export function Chat() {
             </div>
             <button className="btn block" onClick={() => { setMenu(null); setSearching(true); }}>
               <Icon name="search" /> Cari pesan dalam chat
-            </button>
-            <button className="btn block" onClick={() => { setMenu(null); setShop("ghost"); }}>
-              <Icon name="mask" /> Etalase Hantu (72 jam)
             </button>
             <button className="btn block" onClick={() => { setMenu(null); setSafety(true); }}>
               <Icon name="shieldCheck" /> Verifikasi safety number

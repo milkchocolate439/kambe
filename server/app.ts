@@ -11,6 +11,7 @@ import { registerMoments } from "./moments.ts";
 import { createNotary } from "./notary.ts";
 import { createSealedStore } from "./sealed.ts";
 import { simulatedProvider, type PaymentProvider } from "./payments.ts";
+import { registerAttachments } from "./attachments.ts";
 import type { KeyObject } from "node:crypto";
 import {
   FailureBackoff,
@@ -904,7 +905,9 @@ export function createApp(opts: AppOptions) {
 
   // ---- Fase 2: etalase, kesepakatan rekber (simulasi), buku besar ----
 
+  const attachments = registerAttachments({ db, route, authed, readJson, limit, areContacts, isModerator });
   const commerce = registerCommerce({
+    attach: attachments,
     db,
     route,
     authed,
@@ -1017,7 +1020,7 @@ export function createApp(opts: AppOptions) {
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+    res.setHeader("Permissions-Policy", "camera=(self), microphone=(), geolocation=(), payment=()"); // kamera hanya untuk foto etalase di KAMBE sendiri
     res.setHeader("X-Frame-Options", "DENY");
     if (opts.secure) res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
   }
@@ -1268,6 +1271,7 @@ export function createApp(opts: AppOptions) {
     db.prepare("DELETE FROM sealed_objects WHERE kind = 'note' AND id NOT IN (SELECT note_object FROM contact_requests WHERE note_object IS NOT NULL)").run();
     discovery.sweep();
     moments.sweep();
+    attachments.sweep();
     runPinRotation();
     limiter.sweep(24 * HOUR);
   }, 10 * 60 * 1000);

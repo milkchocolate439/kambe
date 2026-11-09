@@ -19,6 +19,7 @@ import { RECEIPT_KIND, type ReceiptBody, type SignedReceipt } from "../shared/re
 import { tx, type DB } from "./db.ts";
 import { HttpError, type AuthHandler, type Handler, type Row, type UserRow } from "./http.ts";
 import type { SealedStore } from "./sealed.ts";
+import type { Attachments } from "./attachments.ts";
 import {
   STATEMENTS_PER_PARTY,
   type DealKeys,
@@ -63,6 +64,7 @@ export interface CommerceDeps {
   readRaw: (req: IncomingMessage, maxBytes?: number) => Promise<string>;
   log: (msg: string) => void;
   sealed: SealedStore;
+  attach: Attachments;
 }
 
 /**
@@ -206,6 +208,8 @@ export function registerCommerce(d: CommerceDeps) {
     return (Object.keys(tableFor(r)[actor][status] ?? {}) as DealAction[]).filter((a) => {
       // Pembeli baru boleh menarik dana sendiri bila penjual melewati batas kirim.
       if (!r.direct && actor === "buyer" && status === "HELD" && a === "refund") return now >= (r.paid_at as number) + t.shipWindowMs;
+      // Kesepakatan langsung: pembeli baru bisa "sudah bayar" SETELAH penjual mengirim rekening penerima.
+      if (r.direct && actor === "buyer" && status === "AWAITING_PAYMENT" && a === "pay") return !!r.payinfo_object;
       return true;
     });
   }
@@ -260,6 +264,7 @@ export function registerCommerce(d: CommerceDeps) {
       paymentUrl: status === "AWAITING_PAYMENT" ? ((r.payment_url as string | null) ?? null) : null,
       direct,
       payment: d.sealed.view(r.payment_object as string | null, viewer),
+      payInfo: d.sealed.view(r.payinfo_object as string | null, viewer),
       receipt: (() => {
         const l = latestReceipt(r.id as string);
         return l ? ({ body: l.body, sig: l.sig } satisfies SignedReceipt) : null;
@@ -442,14 +447,17 @@ export function registerCommerce(d: CommerceDeps) {
     const id = randomUUID();
     const now = Date.now();
     tx(db, () => {
+      // Etalase minimalis: setiap barang WAJIB punya 1 foto (diambil langsung dari kamera di aplikasi).
       const contentId = d.sealed.store(body.sealed, "product", user);
-      db.prepare("INSERT INTO products (id, owner_id, title, description, sector, price, created_at, updated_at, content_object) VALUES (?, ?, '', '', '', ?, ?, ?, ?)").run(
+      const [photo] = d.attach.link(body.photo ? [body.photo] : [], user.id, "product", null, 1);
+      db.prepare("INSERT INTO products (id, owner_id, title, description, sector, price, created_at, updated_at, content_object, photo_attachment) VALUES (?, ?, '', '', '', ?, ?, ?, ?, ?)").run(
         id,
         user.id,
         p,
         now,
         now,
         contentId,
+        photo,
       );
     });
     notifyContactsProducts(user.id);
@@ -467,6 +475,11 @@ export function registerCommerce(d: CommerceDeps) {
     // Kesepakatan yang sudah dibuat memakai harga & judul snapshot — perubahan produk tidak memengaruhinya.
     tx(db, () => {
       let contentId = row.content_object as string | null;
+      if (body.photo !== undefined) {
+        const [photo] = d.attach.link([body.photo], user.id, "product", null, 1);
+        d.attach.remove(row.photo_attachment as string | null);
+        db.prepare("UPDATE products SET photo_attachment = ? WHERE id = ?").run(photo, params.id);
+      }
       if (body.sealed !== undefined) {
         contentId = d.sealed.store(body.sealed, "product", user);
         d.sealed.remove(row.content_object as string | null);
@@ -478,11 +491,12 @@ export function registerCommerce(d: CommerceDeps) {
   }));
 
   route("DELETE", "/api/products/:id", authed(({ user, params }) => {
-    const row = db.prepare("SELECT content_object FROM products WHERE id = ? AND owner_id = ? AND active = 1").get(params.id, user.id) as { content_object: string | null } | undefined;
+    const row = db.prepare("SELECT content_object, photo_attachment FROM products WHERE id = ? AND owner_id = ? AND active = 1").get(params.id, user.id) as { content_object: string | null; photo_attachment: string | null } | undefined;
     if (!row) throw new HttpError(404, "not_found", "Produk tidak ditemukan");
     tx(db, () => {
-      db.prepare("UPDATE products SET active = 0, content_object = NULL, updated_at = ? WHERE id = ?").run(Date.now(), params.id);
+      db.prepare("UPDATE products SET active = 0, content_object = NULL, photo_attachment = NULL, updated_at = ? WHERE id = ?").run(Date.now(), params.id);
       d.sealed.remove(row.content_object);
+      d.attach.remove(row.photo_attachment);
     });
     notifyContactsProducts(user.id);
     return { ok: true };
@@ -582,6 +596,26 @@ export function registerCommerce(d: CommerceDeps) {
     return { deals: rows.map((r) => toDeal(r, user.id)) };
   }));
 
+  // Penjual mengirim rekening/dompet penerima (tersegel untuk pembeli, penjual & moderator).
+  // Langkah WAJIB pertama kesepakatan langsung — sebelum ini pembeli tidak bisa menyatakan sudah bayar.
+  route("POST", "/api/deals/:id/payinfo", authed(async ({ req, user, params }) => {
+    const r = getDeal(params.id);
+    if (!r || r.seller_id !== user.id) throw new HttpError(404, "not_found", "Kesepakatan tidak ditemukan");
+    if (!r.direct || r.status !== "AWAITING_PAYMENT") throw new HttpError(409, "bad_state", "Rekening hanya bisa dikirim saat menunggu pembayaran");
+    d.limit(`payinfo:${user.id}`, 30, HOUR, "Terlalu sering mengirim rekening.");
+    const body = await d.readJson(req, 64 * 1024);
+    rejectPlaintext(body, "number", "provider", "holder");
+    if (!body.sealed) throw new HttpError(400, "payinfo_required", "Isi rekening wajib (terenkripsi)");
+    tx(db, () => {
+      const id = d.sealed.store(body.sealed, "payinfo", user, r.id as string);
+      d.sealed.remove(r.payinfo_object as string | null);
+      db.prepare("UPDATE deals SET payinfo_object = ?, updated_at = ? WHERE id = ? AND status = 'AWAITING_PAYMENT'").run(id, Date.now(), r.id as string);
+    });
+    const fresh = getDeal(r.id as string)!;
+    notifyDeal(fresh);
+    return toDeal(fresh, user.id);
+  }));
+
   // Pernyataan sengketa untuk moderator (didaftarkan SEBELUM /:id/:action agar tidak tertangkap pola itu).
   route("POST", "/api/deals/:id/statements", authed(async ({ req, user, params }) => {
     const r = getDeal(params.id);
@@ -613,6 +647,9 @@ export function registerCommerce(d: CommerceDeps) {
     // walau sudah diblokir — supaya dana tidak pernah tersandera.
     if (action === "pay" && !d.areContacts(r.buyer_id as string, r.seller_id as string)) {
       throw new HttpError(409, "not_contacts", "Kalian tidak lagi terhubung — pembayaran dibatalkan demi keamanan");
+    }
+    if (action === "pay" && r.direct && role === "buyer" && r.status === "AWAITING_PAYMENT" && !r.payinfo_object) {
+      throw new HttpError(409, "payinfo_missing", "Penjual belum mengirim rekening penerima. Tunggu rekeningnya dulu.");
     }
     // Periksa hak lebih dulu (pesan jelas), baru validasi isi. transition() memeriksa ulang secara atomik.
     if (!availableActions(role, r).includes(action)) {
@@ -666,9 +703,11 @@ export function registerCommerce(d: CommerceDeps) {
         return transition(params.id, role, action, now, { shipment_object: shipmentId });
       }
       if (directPay) {
-        // Bukti/catatan transfer OPSIONAL (biar praktis), tapi bila ada wajib tersegel untuk pihak terkait.
-        const paymentId = body?.sealed ? d.sealed.store(body.sealed, "payment", user, r.id as string) : null;
-        return transition(params.id, role, action, now, paymentId ? { payment_object: paymentId } : {});
+        // Form bukti bayar (tersegel) + minimal 1 foto bukti yang diunggah untuk kesepakatan ini — WAJIB.
+        if (!body?.sealed) throw new HttpError(400, "proof_required", "Isi form bukti pembayaran dulu");
+        d.attach.link(body.attachments, user.id, "proof", r.id as string, 3);
+        const paymentId = d.sealed.store(body.sealed, "payment", user, r.id as string);
+        return transition(params.id, role, action, now, { payment_object: paymentId });
       }
       if (action === "dispute") {
         const objectId = d.sealed.store(body!.sealed, "statement", user, r.id as string);

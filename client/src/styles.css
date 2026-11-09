@@ -421,3 +421,16 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .profile-row:first-child { border-top: 0; }
 .profile-row:hover { background: var(--panel-2); }
 .profile-row.danger { color: var(--danger); }
+
+/* ---------- v3: foto terenkripsi, kamera, kotak bayar ---------- */
+.photo-thumb { display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--line-2); padding: 0; color: var(--muted); }
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-thumb.empty { border-style: dashed; }
+.photo-full { width: 100%; height: auto; border-radius: 12px; display: block; }
+.photo-add { display: inline-grid; place-items: center; width: 64px; height: 64px; border-radius: 12px; border: 1px dashed var(--brand); color: var(--brand-2); cursor: pointer; }
+.photo-add:focus-within { outline: 2px solid var(--brand-2); outline-offset: 2px; }
+.camera { display: flex; flex-direction: column; gap: 14px; }
+.camera-view { width: 100%; max-height: 60vh; object-fit: cover; border-radius: 14px; background: #000; }
+.shutter { width: 64px; height: 64px; border-radius: 50%; border: 4px solid var(--text); background: var(--brand); box-shadow: 0 0 0 3px var(--bg); }
+.shutter:disabled { opacity: 0.4; }
+.pay-box { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--glass); border: 1px solid var(--glass-line); }

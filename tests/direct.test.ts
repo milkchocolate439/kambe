@@ -1,7 +1,7 @@
 // Platform gratis + kesepakatan LANGSUNG (pembeli mentransfer sendiri; KAMBE tidak memegang dana).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addProduct, Client, offerDeal, resolveDispute, shipDeal, startApp } from "./helpers.ts";
+import { addProduct, Client, offerDeal, payWithProof, resolveDispute, sendPayInfo, shipDeal, startApp, uploadAttachment } from "./helpers.ts";
 import { directProvider } from "../server/payments.ts";
 import { parseReceipt, verifyChain, type SignedReceipt } from "../shared/receipt.ts";
 
@@ -20,8 +20,11 @@ async function freeMarket(dealTimers?: NonNullable<Parameters<typeof startApp>[0
   return { ...env, seller, buyer, offer };
 }
 
-const payDirect = async (buyer: Client, dealId: string, note?: string) =>
-  buyer.post(`/api/deals/${dealId}/pay`, note ? { sealed: await buyer.seal("payment", { note }, await buyer.dealParties(dealId)) } : {});
+/** Alur tegas: penjual kirim rekening → pembeli isi form + foto bukti. */
+async function payDirect(seller: Client, buyer: Client, dealId: string, note = "") {
+  await sendPayInfo(seller, dealId);
+  return payWithProof(buyer, dealId, { note });
+}
 
 test("platform gratis: tanpa PRO bisa memajang etalase & menawarkan kesepakatan; langganan dimatikan", async () => {
   const { app, base, seller, buyer, offer } = await freeMarket();
@@ -45,17 +48,19 @@ test("kesepakatan langsung: sudah transfer (+bukti tersegel) → uang diterima �
   const { app, seller, buyer, offer } = await freeMarket();
   const deal = (await offer()).body;
   assert.deepEqual(deal.actions, ["cancel"], "penjual (pembuat tawaran) hanya bisa membatalkan");
-  assert.deepEqual((await buyer.get(`/api/deals?peer=${seller.party.id}`)).body.deals[0].actions, ["pay", "cancel"], "pembeli: sudah transfer / batal");
+  assert.deepEqual((await buyer.get(`/api/deals?peer=${seller.party.id}`)).body.deals[0].actions, ["cancel"], "sebelum ada rekening: pembeli belum bisa 'sudah bayar'");
 
-  const paid = await payDirect(buyer, deal.id, "Transfer BCA 12 Nov 14.05, ref 7781");
+  const paid = await payDirect(seller, buyer, deal.id, "Transfer BCA 12 Nov 14.05, ref 7781");
   assert.equal(paid.status, 200);
   assert.equal(paid.body.status, "HELD");
   assert.equal(paid.body.shipBy, null, "tidak ada batas tarik dana — KAMBE tidak memegang dana");
   assert.equal(paid.body.autoRefundAt, null);
   assert.ok(paid.body.payment?.wrap, "bukti transfer tersegel untuk pembeli");
-  assert.deepEqual(await buyer.open(paid.body.payment), { note: "Transfer BCA 12 Nov 14.05, ref 7781" });
+  assert.equal(((await buyer.open(paid.body.payment)) as { note: string }).note, "Transfer BCA 12 Nov 14.05, ref 7781");
   const sellerView = (await seller.get(`/api/deals?peer=${buyer.party.id}`)).body.deals[0];
-  assert.deepEqual(await seller.open(sellerView.payment), { note: "Transfer BCA 12 Nov 14.05, ref 7781" }, "penjual bisa membaca bukti");
+  assert.equal(((await seller.open(sellerView.payment)) as { ref: string }).ref, "REF7781", "penjual bisa membaca form bukti");
+  const buyerView = (await buyer.get(`/api/deals?peer=${seller.party.id}`)).body.deals[0];
+  assert.equal(((await buyer.open(buyerView.payInfo)) as { number: string }).number, "1234567890", "pembeli bisa membaca rekening penerima");
   assert.deepEqual(sellerView.actions.sort(), ["dispute", "refund", "ship"], "penjual: kirim / kembalikan / uang belum masuk");
   assert.ok(!(await buyer.get(`/api/deals?peer=${seller.party.id}`)).body.deals[0].actions.includes("refund"), "pembeli tidak bisa 'tarik dana' — tidak ada dana di KAMBE");
 
@@ -78,21 +83,72 @@ test("kesepakatan langsung: sudah transfer (+bukti tersegel) → uang diterima �
   await app.close();
 });
 
-test("kesepakatan langsung: 'sudah transfer' tanpa bukti tetap boleh (praktis); bukti polos ditolak", async () => {
-  const { app, buyer, offer } = await freeMarket();
+test("alur tegas: 'sudah bayar' DITOLAK sebelum penjual mengirim rekening, tanpa form, atau tanpa foto bukti", async () => {
+  const { app, base, seller, buyer, offer } = await freeMarket();
   const d1 = (await offer()).body;
-  assert.equal((await payDirect(buyer, d1.id)).body.status, "HELD");
+  // 1) Belum ada rekening penerima.
+  const early = await payWithProof(buyer, d1.id).catch(() => null);
+  assert.equal(early, null, "foto bukti bahkan tidak bisa diunggah? (lihat di bawah)");
+  const noInfo = await buyer.post(`/api/deals/${d1.id}/pay`, { sealed: await buyer.seal("payment", { note: "x" }, await buyer.dealParties(d1.id)) });
+  assert.equal(noInfo.status, 409);
+  assert.equal(noInfo.body.error, "payinfo_missing");
+  // Hanya penjual yang bisa mengirim rekening.
+  assert.equal((await sendPayInfo(buyer, d1.id)).status, 404);
+  assert.equal((await sendPayInfo(seller, d1.id)).status, 200);
+  assert.ok((await buyer.get(`/api/deals?peer=${seller.party.id}`)).body.deals[0].actions.includes("pay"), "setelah rekening ada: tombol sudah bayar aktif");
+  // 2) Tanpa form bukti.
+  const noForm = await buyer.post(`/api/deals/${d1.id}/pay`, {});
+  assert.equal(noForm.status, 400);
+  assert.equal(noForm.body.error, "proof_required");
+  // 3) Form tanpa foto.
+  const noPhoto = await buyer.post(`/api/deals/${d1.id}/pay`, { sealed: await buyer.seal("payment", { note: "x" }, await buyer.dealParties(d1.id)) });
+  assert.equal(noPhoto.status, 400);
+  assert.equal(noPhoto.body.error, "attachment_required");
+  // Foto milik orang lain / untuk kesepakatan lain tidak bisa dipakai.
   const d2 = (await offer()).body;
-  const plain = await buyer.post(`/api/deals/${d2.id}/pay`, { note: "transfer BCA" });
-  assert.equal(plain.status, 400);
-  assert.equal(plain.body.error, "content_must_be_encrypted");
+  await sendPayInfo(seller, d2.id);
+  const other = await uploadAttachment(buyer, "proof", d2.id);
+  const wrong = await buyer.post(`/api/deals/${d1.id}/pay`, { sealed: await buyer.seal("payment", { note: "x" }, await buyer.dealParties(d1.id)), attachments: [other] });
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.body.error, "bad_attachment");
+  assert.equal((await buyer.get(`/api/deals?peer=${seller.party.id}`)).body.deals.find((x: { id: string }) => x.id === d1.id).status, "AWAITING_PAYMENT", "gagal = status tidak berubah");
+  // 4) Lengkap → berhasil.
+  assert.equal((await payWithProof(buyer, d1.id)).body.status, "HELD");
+  // Foto bukti: pembeli & penjual bisa unduh, orang lain tidak.
+  const proofId = (app.db.prepare("SELECT id FROM attachments WHERE context = ? AND linked = 1").get(d1.id) as { id: string }).id;
+  assert.equal((await buyer.get(`/api/attachments/${proofId}`)).status, 200);
+  assert.equal((await seller.get(`/api/attachments/${proofId}`)).status, 200);
+  const eve = new Client(base);
+  await eve.signup("Eve_Intip_Bukti");
+  assert.equal((await eve.get(`/api/attachments/${proofId}`)).status, 404, "orang luar tidak bisa melihat bukti");
+  await app.close();
+});
+
+test("etalase: maksimal 3 barang, foto wajib, foto hanya untuk kontak", async () => {
+  const { app, base, seller, buyer } = await freeMarket();
+  const noPhoto = await seller.post("/api/products", { price: 10_000, sealed: await seller.seal("product", { title: "x", description: "", sector: "Lainnya" }, await seller.contactParties()) });
+  assert.equal(noPhoto.status, 400);
+  assert.equal(noPhoto.body.error, "attachment_required");
+  for (let i = 1; i <= 3; i++) assert.equal((await addProduct(seller, { title: `Barang ${i}`, price: 10_000 * i })).status, 200);
+  const fourth = await addProduct(seller, { title: "Barang 4", price: 40_000 });
+  assert.equal(fourth.status, 409);
+  assert.equal(fourth.body.error, "too_many_products");
+  const photoId = (app.db.prepare("SELECT photo_attachment AS p FROM products WHERE owner_id = ? AND active = 1 LIMIT 1").get(seller.party.id) as { p: string }).p;
+  assert.equal((await buyer.get(`/api/attachments/${photoId}`)).status, 200, "kontak bisa melihat foto etalase");
+  const stranger = new Client(base);
+  await stranger.signup("Orang_Asing_Foto");
+  assert.equal((await stranger.get(`/api/attachments/${photoId}`)).status, 404, "orang asing tidak bisa");
+  // Hapus barang → fotonya ikut terhapus.
+  const prodId = (app.db.prepare("SELECT id FROM products WHERE photo_attachment = ?").get(photoId) as { id: string }).id;
+  await seller.del(`/api/products/${prodId}`);
+  assert.equal(app.db.prepare("SELECT 1 FROM attachments WHERE id = ?").get(photoId), undefined);
   await app.close();
 });
 
 test("kesepakatan langsung: penjual 'uang belum masuk' → sengketa tidak kedaluwarsa jadi refund; moderator hanya mencatat putusan", async () => {
   const { app, base, seller, buyer, offer } = await freeMarket({ autoReleaseMs: 50, heldRefundMs: 50, disputeTimeoutMs: 50, shipWindowMs: 50 });
   const deal = (await offer()).body;
-  await payDirect(buyer, deal.id);
+  await payDirect(seller, buyer, deal.id);
   await new Promise((r) => setTimeout(r, 80));
   app.runTimers();
   assert.equal((await buyer.get(`/api/deals?peer=${seller.party.id}`)).body.deals[0].status, "HELD", "HELD tidak di-refund otomatis");
@@ -122,7 +178,7 @@ test("kesepakatan lama tetap pada modenya: mode dibekukan per kesepakatan", asyn
   assert.equal(deal.direct, true);
   // Kolom direct tersimpan per baris; transisi memakai tabel sesuai mode kesepakatan itu.
   assert.equal((app.db.prepare("SELECT direct FROM deals WHERE id = ?").get(deal.id) as { direct: number }).direct, 1);
-  await payDirect(buyer, deal.id);
+  await payDirect(seller, buyer, deal.id);
   assert.equal((await shipDeal(seller, deal.id)).status, 200);
   await app.close();
 });

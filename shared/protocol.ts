@@ -2,6 +2,7 @@
 // metadata di bawah ini — isi pesan selalu berupa ciphertext.
 
 import type { SignedReceipt } from "./receipt.ts";
+import type { AttachmentRef } from "./attach.ts";
 import type { Recipient, SealedView } from "./sealed.ts";
 
 // ---------------------------------------------------------------------------
@@ -9,12 +10,26 @@ import type { Recipient, SealedView } from "./sealed.ts";
 export interface PmContent { text: string }
 export interface NoteContent { text: string }
 export interface LabelContent { text: string }
-export interface ProductContent { title: string; description: string; sector: string }
+export interface ProductContent { title: string; description: string; sector: string; /** Foto kamera langsung (lampiran terenkripsi untuk kontak). */ photo?: AttachmentRef }
 export interface DealContent { title: string }
 export interface ShipmentContent { courier: string; tracking: string | null; note: string }
 export interface StatementContent { reason?: DisputeReason; text: string }
 /** Bukti/catatan transfer dari pembeli pada kesepakatan langsung (tersegel untuk pembeli, penjual & moderator). */
-export interface PaymentProofContent { note: string }
+export interface PaymentProofContent {
+  /** Bank / aset & jaringan asal transfer. */
+  method: string;
+  /** Nama pengirim (pemilik rekening/dompet asal). */
+  sender: string;
+  /** Nominal yang ditransfer (rupiah utuh). */
+  amount: number;
+  /** Waktu transfer seperti tertulis di bukti (teks bebas pendek). */
+  paidAt: string;
+  /** Nomor referensi / hash transaksi. */
+  ref: string;
+  note: string;
+  /** Foto bukti (wajib ≥ 1) — lampiran terenkripsi untuk pembeli, penjual & moderator. */
+  photos: AttachmentRef[];
+}
 export interface ResolutionContent { reason: string }
 
 /** Kunci publik pihak-pihak sebuah kesepakatan, untuk menyegel isi terkait (bukti kirim, pernyataan, …). */
@@ -212,7 +227,7 @@ export const PRICE_MIN = 1_000;
 export const PRICE_MAX = 100_000_000;
 export const PRODUCT_TITLE_MAX = 80;
 export const PRODUCT_DESC_MAX = 500;
-export const MAX_PRODUCTS = 50;
+export const MAX_PRODUCTS = 3; // etalase minimalis: 3 barang, masing-masing 1 foto kamera
 export const SECTORS = ["Komoditas & Pangan", "Jasa Digital & IT", "Desain & Kreatif", "Logistik & B2B", "Lainnya"] as const;
 
 /** Fee platform (default 0 = escrow gratis) dibulatkan ke rupiah terdekat (setengah ke atas) — aritmetika bilangan bulat. */
@@ -296,6 +311,8 @@ export interface Deal {
   direct: boolean;
   /** Bukti/catatan transfer pembeli (PaymentProofContent), kesepakatan langsung saja. */
   payment: SealedView | null;
+  /** Rekening/dompet penerima dari penjual (PayMethod) — WAJIB ada sebelum pembeli bisa menyatakan sudah bayar. */
+  payInfo: SealedView | null;
 }
 
 // ---------------------------------------------------- Fase 3: sengketa ---

@@ -274,7 +274,9 @@ function migrate(db: DatabaseSync) {
   addCol("users", "sign_key", "TEXT");
   // Kesepakatan langsung (tanpa escrow) & bukti transfer tersegel.
   addCol("deals", "direct", "INTEGER NOT NULL DEFAULT 0");
-  addCol("deals", "payment_object", "TEXT"); // kunci publik Ed25519 Buku Jejak Transaksi (kunci privat tidak pernah ke server)
+  addCol("deals", "payment_object", "TEXT");
+  addCol("deals", "payinfo_object", "TEXT"); // rekening penerima dari penjual (tersegel)
+  addCol("products", "photo_attachment", "TEXT"); // foto etalase (lampiran terenkripsi) // kunci publik Ed25519 Buku Jejak Transaksi (kunci privat tidak pernah ke server)
   // Retensi 30 hari: waktu pesan belum terkirim ditandai "expired" (ciphertext sudah dikosongkan).
   addCol("messages", "expired_at", "INTEGER");
   addCol("contact_requests", "note_object", "TEXT");

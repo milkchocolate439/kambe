@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import {
   FEE_PER_MILLE,
+  MAX_PRODUCTS,
   PRICE_MAX,
   PRICE_MIN,
   PRODUCT_DESC_MAX,
@@ -12,7 +13,6 @@ import {
   type DealAction,
   type DealStatus,
   type DealContent,
-  type PaymentProofContent,
   type Product,
   type ProductContent,
 } from "../../../shared/protocol.ts";
@@ -21,7 +21,9 @@ import { ApiError } from "../lib/api.ts";
 import { Modal, SealedText, timeOf, useMessenger, useSealed } from "./common.tsx";
 import { Icon } from "./icons.tsx";
 import { DisputeModal, DisputeThread, ResolutionNote, ShipmentInfo, ShipModal } from "./Disputes.tsx";
-import { PayMethodsManager, PayProofModal, SendPayInfoModal } from "./Payments.tsx";
+import { DealPayInfo, DealProof, PayMethodsManager, PayProofModal, SendPayInfoModal } from "./Payments.tsx";
+import { CameraCapture } from "./Camera.tsx";
+import { AttachmentImage } from "./Photo.tsx";
 
 export const rupiah = (n: number) => "Rp" + n.toLocaleString("id-ID");
 /** Pratinjau fee dengan tarif dari server (0 = escrow gratis). Server tetap yang menghitung fee sebenarnya. */
@@ -108,7 +110,7 @@ type ActionMeta = { label: string; primary?: boolean; danger?: boolean; confirm?
 function directMeta(a: DealAction, buyer: boolean): ActionMeta {
   switch (a) {
     case "pay":
-      return { label: "Sudah transfer", primary: true };
+      return { label: "Sudah bayar", primary: true };
     case "ship":
       return { label: "Uang diterima · kirim", primary: true };
     case "confirm":
@@ -161,7 +163,10 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
   const { busy, error, run } = useAction();
   const iAmBuyer = deal.buyerId === s.me.id;
   const direct = deal.direct;
-  const st = (direct ? DIRECT_STATUS : STATUS)[deal.status];
+  const st =
+    direct && deal.status === "AWAITING_PAYMENT" && !deal.payInfo
+      ? { label: "Menunggu rekening", tone: "warn" as const }
+      : (direct ? DIRECT_STATUS : STATUS)[deal.status];
   const when = (ts: number) => `${new Date(ts).toLocaleDateString("id-ID", { day: "numeric", month: "short" })} ${timeOf(ts)}`;
   // Pembeli yang menarik dana sendiri (penjual lewat batas kirim) diberi label & penjelasan berbeda.
   const meta = (a: DealAction): ActionMeta =>
@@ -189,18 +194,11 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
         <SealedText<DealContent> view={deal.content} field="title" locked="🔒 Judul terenkripsi (menunggu dibagikan)" max={PRODUCT_TITLE_MAX} />
       </strong>
       <div className="deal-grid small">
-        <span className="muted">{iAmBuyer ? "Kamu membeli dari" : "Kamu menjual ke"}</span>
+        <span className="muted">{iAmBuyer ? "Penjual" : "Pembeli"}</span>
         <span>{peerAlias}</span>
         <span className="muted">Harga</span>
         <span className="mono">{rupiah(deal.price)}</span>
-        {direct ? (
-          <>
-            <span className="muted">Pembayaran</span>
-            <span>Langsung ke penjual</span>
-            <span className="muted">Biaya KAMBE</span>
-            <span>Gratis</span>
-          </>
-        ) : (
+        {direct ? null : (
           <>
             <span className="muted">{deal.fee > 0 ? `Fee platform (${((deal.fee / deal.price) * 100).toLocaleString("id-ID", { maximumFractionDigits: 1 })}%)` : "Biaya escrow KAMBE"}</span>
             <span className="mono">{deal.fee > 0 ? `−${rupiah(deal.fee)}` : "Gratis"}</span>
@@ -227,20 +225,11 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
       )}
       <ReceiptLine deal={deal} />
       <TxLine deal={deal} peerAlias={peerAlias} />
-      {direct && iAmBuyer && deal.status === "AWAITING_PAYMENT" && (
-        <div className="tiny muted">Transfer ke info pembayaran yang dikirim {peerAlias} di chat, lalu tekan "Sudah transfer". KAMBE tidak memegang dana.</div>
-      )}
-      {direct && !iAmBuyer && deal.status === "HELD" && (
-        <div className="tiny muted">Cek mutasi rekening/dompetmu. Kalau uang sudah masuk, tekan "Uang diterima · kirim". Kalau belum, tekan "Uang belum masuk".</div>
-      )}
-      {direct && deal.payment && (
-        <div className="tiny">
-          <Icon name="wallet" size={12} /> Catatan transfer: <SealedText<PaymentProofContent> view={deal.payment} field="note" max={300} locked="🔒 terenkripsi" />
-        </div>
-      )}
-      {direct && !iAmBuyer && (deal.status === "AWAITING_PAYMENT" || deal.status === "HELD") && (
-        <button className="btn small" onClick={() => setPayInfo(true)}>
-          <Icon name="wallet" size={14} /> Kirim info pembayaran
+      {direct && <DealPayInfo deal={deal} />}
+      {direct && <DealProof deal={deal} />}
+      {direct && !iAmBuyer && deal.status === "AWAITING_PAYMENT" && (
+        <button className={`btn small ${deal.payInfo ? "" : "primary"}`} onClick={() => setPayInfo(true)}>
+          <Icon name="wallet" size={14} /> {deal.payInfo ? "Ganti rekening" : "Kirim rekening"}
         </button>
       )}
       {deal.paymentUrl?.startsWith("https://") && iAmBuyer && (
@@ -254,7 +243,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
       {deal.status === "DISPUTED" && (
         <div className="tiny" style={{ color: "var(--danger)" }}>
           {direct
-            ? "Sengketa berjalan. KAMBE tidak memegang dana — moderator menilai bukti kedua pihak (catatan transfer, resi, pernyataan)."
+            ? "Sengketa — moderator menilai bukti."
             : iAmBuyer
               ? "Kamu mengajukan sengketa. Diskusikan dengan penjual; dana tetap ditahan."
               : "Pembeli mengajukan sengketa. Dana ditahan sampai kamu mengembalikan dana atau pembeli menerima barang."}
@@ -309,7 +298,7 @@ export function DealCard({ deal, peer, peerAlias }: { deal: Deal; peer: string; 
       {form === "ship" && <ShipModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
       {form === "dispute" && <DisputeModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
       {form === "pay" && <PayProofModal deal={deal} peer={peer} onClose={() => setForm(null)} />}
-      {payInfo && <SendPayInfoModal peer={peer} peerAlias={peerAlias} onClose={() => setPayInfo(false)} />}
+      {payInfo && <SendPayInfoModal peer={peer} dealId={deal.id} onClose={() => setPayInfo(false)} />}
     </div>
   );
 }
@@ -460,11 +449,11 @@ function CatalogItem({ product, onChoose }: { product: Product; onChoose: (c: Pr
   const content = s.state === "ok" ? s.data : null;
   return (
     <button className="item" style={{ alignItems: "flex-start" }} disabled={!content} onClick={() => content && onChoose(content)}>
+      {content?.photo && <AttachmentImage refRaw={content.photo} alt={cleanDisplayText(content.title, PRODUCT_TITLE_MAX)} size={72} zoom={false} />}
       <div className="grow">
         {content ? (
           <>
             <span className="name">{cleanDisplayText(content.title, PRODUCT_TITLE_MAX)}</span>
-            <div className="tiny muted">{cleanDisplayText(content.sector, 40)}</div>
             {content.description && (
               <div className="small" style={{ color: "var(--text-2)", marginTop: 4, whiteSpace: "pre-wrap" }}>
                 {cleanDisplayText(content.description, PRODUCT_DESC_MAX)}
@@ -716,12 +705,15 @@ function ProductsTab() {
   if (editing) return <ProductForm initial={editing} onDone={() => setEditing(null)} />;
   return (
     <div className="stack">
-      <button className="btn primary block" onClick={() => setEditing({ title: "", description: "", sector: SECTORS[0], price: 0 })}>
-        <Icon name="plus" /> Tambah produk / jasa
-      </button>
-      {s.myProducts.length === 0 ? (
-        <div className="hint" style={{ textAlign: "center" }}>Etalase masih kosong. Hanya kontakmu yang bisa melihatnya (terenkripsi).</div>
-      ) : (
+      <div className="row">
+        <strong className="grow">Etalase {s.myProducts.length}/{MAX_PRODUCTS}</strong>
+        {s.myProducts.length < MAX_PRODUCTS && (
+          <button className="btn primary" onClick={() => setEditing({ title: "", description: "", sector: SECTORS[SECTORS.length - 1], price: 0 })}>
+            <Icon name="plus" /> Tambah barang
+          </button>
+        )}
+      </div>
+      {s.myProducts.length === 0 ? null : (
         <div className="list">
           {s.myProducts.map((p) => (
             <MyProductRow key={p.id} product={p} busy={busy} run={run} onEdit={setEditing} />
@@ -740,11 +732,10 @@ function MyProductRow({ product: p, busy, run, onEdit }: { product: Product; bus
   const title = c ? cleanDisplayText(c.title, PRODUCT_TITLE_MAX) : "🔒";
   return (
     <div className="row" style={{ padding: "8px 4px", borderBottom: "1px solid var(--line)" }}>
+      {c?.photo ? <AttachmentImage refRaw={c.photo} alt={title} size={48} /> : <span className="photo-thumb empty" style={{ width: 48, height: 48 }} />}
       <div className="grow">
         <div className="truncate" style={{ fontWeight: 700 }}>{title}</div>
-        <div className="tiny muted">
-          {c ? cleanDisplayText(c.sector, 40) : "—"} · <span className="mono">{rupiah(p.price)}</span>
-        </div>
+        <div className="tiny mono">{rupiah(p.price)}</div>
       </div>
       <button className="btn ghost icon" aria-label={`Ubah ${title}`} disabled={!c} onClick={() => c && onEdit({ id: p.id, price: p.price, ...c })}>
         <Icon name="edit" />
@@ -762,27 +753,49 @@ function ProductForm({ initial, onDone }: { initial: ProductDraft; onDone: () =>
   const [description, setDescription] = useState(initial.description);
   const [sector, setSector] = useState(initial.sector || SECTORS[0]);
   const [price, setPrice] = useState(initial.price);
+  const [camera, setCamera] = useState(false);
+  const [shot, setShot] = useState<{ bytes: Uint8Array; url: string } | null>(null);
   const { busy, error, run } = useAction();
   const problem = priceProblem(price);
+  const needsPhoto = !initial.id && !shot;
+  void setSector;
 
   async function save() {
-    const ok = await run(() => m.saveProduct({ id: initial.id, title: title.trim(), description: description.trim(), sector, price }), initial.id ? "Produk diperbarui" : "Produk dipajang di etalase");
+    const ok = await run(
+      () => m.saveProduct({ id: initial.id, title: title.trim(), description: description.trim(), sector, price, photo: shot?.bytes, keepPhoto: initial.photo }),
+      initial.id ? "Barang diperbarui" : "Barang dipajang",
+    );
     if (ok !== undefined) onDone();
   }
 
   return (
     <div className="stack">
-      <div className="field">
-        <label htmlFor="p-title">Nama produk / jasa</label>
-        <input id="p-title" className="input" maxLength={PRODUCT_TITLE_MAX} value={title} onChange={(e) => setTitle(e.target.value)} />
+      <div className="row" style={{ gap: 10 }}>
+        {shot ? (
+          <span className="photo-thumb" style={{ width: 96, height: 96 }}>
+            <img src={shot.url} alt="Foto barang" />
+          </span>
+        ) : initial.photo ? (
+          <AttachmentImage refRaw={initial.photo} alt="Foto barang" size={96} />
+        ) : (
+          <span className="photo-thumb empty" style={{ width: 96, height: 96 }} />
+        )}
+        <button className={`btn ${needsPhoto ? "primary" : ""}`} onClick={() => setCamera(true)}>
+          <Icon name="camera" /> {shot || initial.photo ? "Ulang foto" : "Ambil foto"}
+        </button>
       </div>
+      {camera && (
+        <CameraCapture
+          onShot={(bytes, url) => {
+            setShot({ bytes, url });
+            setCamera(false);
+          }}
+          onClose={() => setCamera(false)}
+        />
+      )}
       <div className="field">
-        <label htmlFor="p-sector">Sektor</label>
-        <select id="p-sector" className="input" value={sector} onChange={(e) => setSector(e.target.value)}>
-          {SECTORS.map((x) => (
-            <option key={x}>{x}</option>
-          ))}
-        </select>
+        <label htmlFor="p-title">Nama barang</label>
+        <input id="p-title" className="input" maxLength={PRODUCT_TITLE_MAX} value={title} onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="field">
         <label htmlFor="p-price">Harga</label>
@@ -796,7 +809,7 @@ function ProductForm({ initial, onDone }: { initial: ProductDraft; onDone: () =>
       {error && <span className="error" role="alert">{error}</span>}
       <div className="row">
         <button className="btn grow" onClick={onDone}>Batal</button>
-        <button className="btn primary grow" disabled={busy || !!problem || title.trim().length < 3} onClick={() => void save()}>
+        <button className="btn primary grow" disabled={busy || !!problem || title.trim().length < 3 || needsPhoto} onClick={() => void save()}>
           {busy ? "Menyimpan…" : "Simpan"}
         </button>
       </div>

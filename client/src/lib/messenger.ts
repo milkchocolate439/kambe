@@ -51,6 +51,8 @@ import {
 } from "../../../shared/ctl.ts";
 import { findContactLeak, LEAK_MESSAGE } from "../../../shared/contactguard.ts";
 import { encodePayInfo, PAY_METHODS_MAX, validatePayMethod, type PayMethod } from "../../../shared/payinfo.ts";
+import { decryptAttachment, encryptAttachment, validateRef, type AttachMime, type AttachmentRef } from "../../../shared/attach.ts";
+import { fromB64, toB64 } from "../../../shared/e2ee.ts";
 import { api, ApiError } from "./api.ts";
 import { keystore, type LocalMessage, type PinnedKey, type UnlockedDevice } from "./keystore.ts";
 import { BACKUP_MAX_BYTES, decryptBackup, encryptBackup } from "../../../shared/vault.ts";
@@ -796,15 +798,19 @@ export class Messenger {
   }
 
   /** Nama/deskripsi/sektor disegel untuk kontak; hanya harga yang terbaca server (dasar fee). */
-  async saveProduct(p: { id?: string; title: string; description: string; sector: string; price: number }) {
+  async saveProduct(p: { id?: string; title: string; description: string; sector: string; price: number; photo?: Uint8Array; keepPhoto?: AttachmentRef }) {
     const content: ProductContent = {
       title: cleanDisplayText(p.title, PRODUCT_TITLE_MAX),
       description: cleanDisplayText(p.description, PRODUCT_DESC_MAX),
       sector: p.sector,
     };
     this.guard(content.title, content.description);
+    if (!p.id && !p.photo) throw new ApiError(400, "attachment_required", "Ambil foto barang dulu");
+    // Foto kamera → dienkripsi di perangkat; kuncinya ikut tersegel untuk kontak.
+    const fresh = p.photo ? await this.uploadAttachment("product", p.photo, "image/jpeg") : null;
+    content.photo = fresh ?? p.keepPhoto;
     const sealed = await this.sealAs("product", content, this.contactRecipients());
-    await api(p.id ? "PATCH" : "POST", p.id ? `/api/products/${p.id}` : "/api/products", { price: p.price, sealed });
+    await api(p.id ? "PATCH" : "POST", p.id ? `/api/products/${p.id}` : "/api/products", { price: p.price, sealed, ...(fresh ? { photo: fresh.id } : {}) });
     await this.loadMyStore();
     return true;
   }
@@ -949,11 +955,8 @@ export class Messenger {
   /** "ship" butuh bukti kirim, "dispute" butuh cerita — keduanya disegel untuk pembeli, penjual & moderator. */
   async dealAction(peer: string, dealId: string, action: DealAction, content?: ShipmentContent | StatementContent | PaymentProofContent) {
     let body: Record<string, unknown> | undefined;
-    const direct = this.state.deals[peer]?.find((d) => d.id === dealId)?.direct;
-    if (action === "pay" && direct) {
-      // "Sudah transfer": catatan/bukti opsional, disegel untuk pembeli, penjual & moderator.
-      const note = content && "note" in content ? cleanDisplayText(content.note, STATEMENT_MAX) : "";
-      body = note ? { sealed: await this.sealAs("payment", { note } satisfies PaymentProofContent, await this.dealRecipients(dealId)) } : {};
+    if (action === "pay" && this.state.deals[peer]?.find((d) => d.id === dealId)?.direct) {
+      throw new ApiError(400, "proof_required", "Isi form bukti pembayaran & unggah fotonya dulu");
     }
     if (action === "ship" || action === "dispute") {
       if (!content) throw new ApiError(400, "content_required", action === "ship" ? "Bukti kirim wajib diisi" : "Ceritakan masalahnya");
@@ -1100,6 +1103,70 @@ export class Messenger {
     } catch {
       /* diabaikan */
     }
+  }
+
+  // --------------------------------------------- lampiran terenkripsi ---
+
+  private attachUrls = new Map<string, Promise<string>>();
+
+  /** Enkripsi foto di perangkat lalu unggah blob acaknya. Kunci TIDAK pernah ke server. */
+  async uploadAttachment(kind: "proof" | "product", bytes: Uint8Array, mime: AttachMime, context?: string): Promise<AttachmentRef> {
+    const enc = await encryptAttachment(bytes);
+    const r = await api<{ id: string; sha256: string }>("POST", "/api/attachments", { kind, context, data: toB64(enc.blob) });
+    if (r.sha256 !== enc.sha256) throw new ApiError(502, "bad_upload", "Unggahan foto rusak di jalan. Coba lagi.");
+    return { id: r.id, key: enc.key, sha256: enc.sha256, mime };
+  }
+
+  /** URL objek (blob:) untuk menampilkan foto yang sudah didekripsi di perangkat. */
+  attachmentUrl(raw: unknown): Promise<string> {
+    let ref: AttachmentRef;
+    try {
+      ref = validateRef(raw);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    let p = this.attachUrls.get(ref.id + ref.sha256);
+    if (!p) {
+      p = (async () => {
+        const { data } = await api<{ data: string }>("GET", `/api/attachments/${ref.id}`);
+        const plain = await decryptAttachment(fromB64(data), ref);
+        return URL.createObjectURL(new Blob([plain as Uint8Array<ArrayBuffer>], { type: ref.mime }));
+      })();
+      p.catch(() => this.attachUrls.delete(ref.id + ref.sha256));
+      this.attachUrls.set(ref.id + ref.sha256, p);
+    }
+    return p;
+  }
+
+  /** Penjual: kirim rekening/dompet penerima ke kesepakatan (langkah wajib pertama). */
+  async sharePayInfo(peer: string, dealId: string, methodId: string) {
+    const m = (this.state.payMethods ?? (await this.loadPayMethods())).find((x) => x.id === methodId);
+    if (!m) throw new ApiError(404, "not_found", "Info pembayaran tidak ditemukan");
+    const { id: _id, ...info } = m;
+    const sealed = await this.sealAs("payinfo", info, await this.dealRecipients(dealId));
+    const deal = await api<Deal>("POST", `/api/deals/${dealId}/payinfo`, { sealed });
+    this.upsertDeal(peer, deal);
+    return deal;
+  }
+
+  /** Pembeli: form bukti + foto bukti (wajib) → "sudah bayar". */
+  async payWithProof(peer: string, dealId: string, form: Omit<PaymentProofContent, "photos">, photos: Uint8Array[]) {
+    if (!photos.length) throw new ApiError(400, "attachment_required", "Foto bukti pembayaran wajib");
+    const refs: AttachmentRef[] = [];
+    for (const ph of photos.slice(0, 3)) refs.push(await this.uploadAttachment("proof", ph, "image/jpeg", dealId));
+    const content: PaymentProofContent = {
+      method: cleanDisplayText(form.method, 60),
+      sender: cleanDisplayText(form.sender, 60),
+      amount: Math.max(0, Math.floor(form.amount)),
+      paidAt: cleanDisplayText(form.paidAt, 40),
+      ref: cleanDisplayText(form.ref, 120),
+      note: cleanDisplayText(form.note, STATEMENT_MAX),
+      photos: refs,
+    };
+    const sealed = await this.sealAs("payment", content, await this.dealRecipients(dealId));
+    const deal = await api<Deal>("POST", `/api/deals/${dealId}/pay`, { sealed, attachments: refs.map((r) => r.id) });
+    this.upsertDeal(peer, deal);
+    return deal;
   }
 
   // ------------------------------------------------ info pembayaran ---

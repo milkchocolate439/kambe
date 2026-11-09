@@ -9,10 +9,32 @@ import { openSealed, seal, type Recipient, type SealedBlob, type SealedKind, typ
 
 // ------------------------------------------------ pembantu dagang terenkripsi ---
 
-/** Pajang produk: nama/deskripsi/sektor disegel untuk semua kontak penjual. */
+/** Unggah lampiran uji (blob acak = seolah foto terenkripsi). Mengembalikan id. */
+export async function uploadAttachment(c: Client, kind: "proof" | "product", context?: string): Promise<string> {
+  const blob = crypto.getRandomValues(new Uint8Array(96));
+  const r = await c.post("/api/attachments", { kind, context, data: Buffer.from(blob).toString("base64") });
+  if (r.status !== 200) throw new Error(`unggah gagal ${r.status} ${JSON.stringify(r.body)}`);
+  return r.body.id as string;
+}
+
+/** Pajang produk: nama/deskripsi/sektor disegel untuk semua kontak penjual; foto wajib. */
 export async function addProduct(seller: Client, p: { title: string; price: number; sector?: string; description?: string }) {
   const content = { title: p.title, description: p.description ?? "", sector: p.sector ?? "Lainnya" };
-  return seller.post("/api/products", { price: p.price, sealed: await seller.seal("product", content, await seller.contactParties()) });
+  const photo = await uploadAttachment(seller, "product").catch(() => undefined);
+  return seller.post("/api/products", { price: p.price, photo, sealed: await seller.seal("product", content, await seller.contactParties()) });
+}
+
+/** Penjual mengirim rekening penerima (wajib sebelum pembeli bisa menyatakan sudah bayar). */
+export async function sendPayInfo(seller: Client, dealId: string) {
+  const info = { kind: "bank", provider: "BCA", holder: "Penjual Uji", number: "1234567890" };
+  return seller.post(`/api/deals/${dealId}/payinfo`, { sealed: await seller.seal("payinfo", info, await seller.dealParties(dealId)) });
+}
+
+/** Pembeli: form bukti + foto bukti → "sudah bayar". */
+export async function payWithProof(buyer: Client, dealId: string, over: Record<string, unknown> = {}) {
+  const photo = await uploadAttachment(buyer, "proof", dealId);
+  const content = { method: "BCA", sender: "Pembeli Uji", amount: 200_000, paidAt: "12 Nov 14.05", ref: "REF7781", note: "", photos: [], ...over };
+  return buyer.post(`/api/deals/${dealId}/pay`, { sealed: await buyer.seal("payment", content, await buyer.dealParties(dealId)), attachments: [photo] });
 }
 
 /** Pembeli membuat kesepakatan dari produk; judul disegel untuk penjual & moderator. */

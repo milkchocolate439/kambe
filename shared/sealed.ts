@@ -17,7 +17,7 @@ const subtle = globalThis.crypto.subtle;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-export const SEALED_KINDS = ["note", "pm", "label", "product", "deal", "shipment", "statement", "resolution", "payment"] as const;
+export const SEALED_KINDS = ["note", "pm", "label", "product", "deal", "shipment", "statement", "resolution", "payment", "payinfo"] as const;
 export type SealedKind = (typeof SEALED_KINDS)[number];
 export const SEALED_CT_MAX_B64 = 8192;
 
