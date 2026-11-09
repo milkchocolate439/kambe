@@ -62,15 +62,64 @@ async function main() {
     await buyer.locator(".status.D, .status.R").first().waitFor({ timeout: 30000 });
     check(true, "status D/R kembali ke pengirim");
 
+    // Penjual menyimpan dompet kripto (disarankan) di brankasnya.
+    const ADDR = "TLiveUji7xQp2mN8vR4sK1aZ9cY3bW6dE5";
+    await seller.getByRole("button", { name: "Toko & Dompet" }).click();
+    await seller.getByRole("tab", { name: "Dompet" }).click();
+    await seller.getByLabel("Aset & jaringan").fill("USDT · TRC20");
+    await seller.getByLabel("Alamat dompet").fill(ADDR);
+    await seller.getByRole("button", { name: "Simpan info pembayaran" }).click();
+    await seller.getByRole("dialog").getByText(ADDR).waitFor();
+    await seller.keyboard.press("Escape");
+
+    // Alur tegas v3: tawaran → MENUNGGU REKENING → rekening dikirim → bukti berfoto.
     await seller.getByRole("button", { name: "Tawarkan kesepakatan rekber" }).click();
     await seller.getByLabel("Barang / jasa").fill("Kopi uji live");
     await seller.getByLabel("Harga").fill("50000");
     await seller.getByRole("button", { name: "Kirim tawaran" }).click();
     const card = buyer.locator(".deal-card", { hasText: "Kopi uji live" });
-    await card.getByText("Menunggu transfer").waitFor({ timeout: 30000 });
-    check((await card.textContent())?.includes("Langsung ke penjual") === true, "kesepakatan langsung (gratis) sampai ke pembeli");
+    await card.getByText("Menunggu rekening").waitFor({ timeout: 30000 });
+    check((await card.textContent())?.includes("KESEPAKATAN LANGSUNG") === true, "kesepakatan langsung (gratis) sampai ke pembeli");
+    check((await card.getByRole("button", { name: "Sudah bayar" }).count()) === 0, "sebelum rekening dikirim: pembeli TIDAK bisa 'Sudah bayar'");
     await card.getByText(/Kuitansi #0 sah/).waitFor({ timeout: 30000 });
     check(true, "kuitansi notaris terverifikasi di HP pembeli");
+
+    const sCard = seller.locator(".deal-card", { hasText: "Kopi uji live" });
+    await sCard.getByRole("button", { name: "Kirim rekening" }).click();
+    await seller.getByRole("button", { name: "Kirim USDT · TRC20" }).click();
+    await card.getByText("Menunggu transfer").waitFor({ timeout: 30000 });
+    check((await card.textContent())?.includes(ADDR) === true, "rekening penjual sampai ke HP pembeli (tersegel E2EE)");
+
+    await card.getByRole("button", { name: "Sudah bayar" }).click();
+    const dlg = buyer.getByRole("dialog", { name: "Bukti pembayaran" });
+    const submit = dlg.getByRole("button", { name: "Sudah bayar" });
+    await dlg.getByLabel("Dari bank / dompet").fill("USDT TRC20 · uji live");
+    await dlg.getByLabel("Nama pengirim").fill("Pembeli Live");
+    await dlg.getByLabel("No. referensi / hash").fill("live7c21beef");
+    check(await submit.isDisabled(), "tanpa foto bukti: 'Sudah bayar' terkunci");
+    const png = Buffer.from(
+      await buyer.evaluate(() => {
+        const c = document.createElement("canvas");
+        c.width = 320;
+        c.height = 200;
+        const g = c.getContext("2d")!;
+        g.fillStyle = "#1f6f43";
+        g.fillRect(0, 0, 320, 200);
+        g.fillStyle = "#fff";
+        g.font = "20px sans-serif";
+        g.fillText("TRANSFER UJI LIVE", 20, 100);
+        return c.toDataURL("image/png").split(",")[1];
+      }),
+      "base64",
+    );
+    await dlg.locator("#pp-photo").setInputFiles({ name: "bukti.png", mimeType: "image/png", buffer: png });
+    await dlg.locator(".photo-thumb img").first().waitFor();
+    await submit.click();
+    await card.getByText("Pembeli sudah transfer · cek mutasi").waitFor({ timeout: 30000 });
+    await sCard.getByText("live7c21beef").waitFor({ timeout: 30000 });
+    const proofImg = sCard.locator(".photo-thumb img").first();
+    await proofImg.waitFor({ timeout: 30000 });
+    check(await proofImg.evaluate((i) => (i as HTMLImageElement).naturalWidth > 0), "bukti + foto terenkripsi terunggah & terbuka di perangkat penjual");
   } catch (e) {
     failures++;
     console.error("✖ terhenti:", e);
