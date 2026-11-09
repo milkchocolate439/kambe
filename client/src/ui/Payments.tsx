@@ -62,7 +62,7 @@ function AddMethodForm({ onDone }: { onDone?: (m: PayMethod) => void }) {
       </div>
       {kind === "crypto" && (
         <span className="hint">
-          <Icon name="shieldCheck" size={12} /> Disarankan. Pastikan pembeli memakai <strong>jaringan yang sama</strong> — kiriman ke jaringan yang salah tidak bisa dikembalikan.
+          <Icon name="alert" size={12} /> Jaringan harus sama.
         </span>
       )}
       <div className="field">
@@ -81,9 +81,6 @@ function AddMethodForm({ onDone }: { onDone?: (m: PayMethod) => void }) {
       <button className="btn primary block" disabled={busy || !provider.trim() || !number.trim()} onClick={() => void save()}>
         <Icon name="plus" size={15} /> Simpan info pembayaran
       </button>
-      <span className="hint">
-        <Icon name="lock" size={12} /> Disimpan terenkripsi di perangkat ini saja, bukan di server. E-wallet tidak didukung karena nomornya adalah nomor HP.
-      </span>
     </div>
   );
 }
@@ -97,9 +94,6 @@ export function PayMethodsManager() {
   const list = s.payMethods;
   return (
     <div className="stack">
-      <div className="hint">
-        KAMBE gratis dan <strong>tidak memegang dana</strong>. Pembeli mentransfer langsung ke info pembayaranmu, lalu menekan "Sudah transfer". Setiap langkah dicatat notaris & Buku Jejak.
-      </div>
       {list === null ? (
         <div className="hint">Memuat…</div>
       ) : list.length === 0 ? (
@@ -144,7 +138,7 @@ export function SendPayInfoModal({ peer, dealId, onClose }: { peer: string; deal
     <Modal title="Kirim rekening" onClose={onClose}>
       <div className="stack">
         {list.length > 0 && (
-          <div className="list">
+          <div className="list" aria-label="Rekening tersimpan">
             {list.map((x) => (
               <div key={x.id} className="item" style={{ alignItems: "center", cursor: "default" }}>
                 <MethodLine m={x} />

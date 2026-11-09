@@ -72,7 +72,7 @@ async function main() {
       const y = (sel: string) => document.querySelector(sel)?.getBoundingClientRect().top ?? Infinity;
       return { chats: y(".chats"), hero: y(".hero-card") };
     });
-    check(order.chats < order.hero, "punya kontak: daftar obrolan di atas kartu PIN");
+    check(order.chats < order.hero, "punya kontak: daftar obrolan jadi layar utama (kartu PIN pindah ke Profil)");
     check((await mobile.getByRole("heading", { name: "Obrolan" }).count()) === 1, "judul besar 'Obrolan'");
 
     // Dock HP.
@@ -87,6 +87,8 @@ async function main() {
     await desk.getByLabel("Tulis pesan").fill("Halo dari desktop");
     await desk.getByRole("button", { name: "Kirim" }).click();
     await mobile.getByRole("button", { name: /Belum dibaca \(1\)/ }).waitFor();
+    const sst = await mobile.evaluate(() => Number(document.documentElement.dataset.sst ?? 0));
+    check(sst >= 1, `pesan masuk berbunyi "SSSSSTTT!!" (${sst}×)`);
     await mobile.getByRole("button", { name: /Belum dibaca/ }).click();
     check((await mobile.getByRole("button", { name: /Bima_Desktop/ }).count()) === 1, "filter 'Belum dibaca' menampilkan kontak yang mengirim pesan");
     await mobile.getByRole("button", { name: "Terverifikasi" }).click();
@@ -126,6 +128,31 @@ async function main() {
     check(!(await desk.getByRole("navigation", { name: "Navigasi utama" }).isVisible()), "desktop: tanpa dock");
     check(await desk.getByRole("button", { name: "Tambah kontak" }).isVisible(), "desktop: tombol tambah kontak di header Obrolan");
     await desk.screenshot({ path: join(OUT, "u3-desktop.png") });
+
+    // Popup Web Push: kirim push sungguhan ke service worker lewat DevTools Protocol.
+    check(await desk.getByRole("button", { name: "Notifikasi" }).isVisible(), "tombol lonceng notifikasi tersedia");
+    await desk.context().grantPermissions(["notifications"], { origin: BASE });
+    await desk.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+    });
+    const cdp = await desk.context().newCDPSession(desk);
+    const regs: string[] = [];
+    cdp.on("ServiceWorker.workerRegistrationUpdated", (e: { registrations: { registrationId: string; scopeURL: string }[] }) => {
+      for (const r of e.registrations) if (r.scopeURL.startsWith(BASE)) regs.push(r.registrationId);
+    });
+    await cdp.send("ServiceWorker.enable");
+    for (let i = 0; i < 20 && !regs.length; i++) await desk.waitForTimeout(100);
+    await cdp.send("ServiceWorker.deliverPushMessage", {
+      origin: BASE + "/",
+      registrationId: regs[0],
+      data: JSON.stringify({ title: "SSSSSTTT!!", body: "Pesan baru dari Ayu_Mobile", tag: "kambe-uji", url: "/" }),
+    });
+    let shown: string[] = [];
+    for (let i = 0; i < 30 && !shown.length; i++) {
+      await desk.waitForTimeout(200);
+      shown = await desk.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).map((n) => `${n.title}|${n.body}`));
+    }
+    check(shown.includes("SSSSSTTT!!|Pesan baru dari Ayu_Mobile"), `popup notifikasi muncul dari push (${shown.join(", ") || "tidak ada"})`);
   } catch (e) {
     failures++;
     console.error("✖ skenario terhenti:", e);

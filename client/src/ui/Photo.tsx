@@ -30,6 +30,14 @@ export function AttachmentImage({ refRaw, alt, size = 64, zoom = true }: { refRa
     );
   }
   if (!url) return <span className="photo-thumb empty" style={box} aria-hidden="true" />;
+  // Di dalam tombol lain (mis. item etalase) jangan jadi tombol bersarang: tampilkan gambar biasa.
+  if (!zoom) {
+    return (
+      <span className="photo-thumb" style={box}>
+        <img src={url} alt="" />
+      </span>
+    );
+  }
   return (
     <>
       <button type="button" className="photo-thumb" style={box} onClick={() => zoom && setOpen(true)} aria-label={alt}>

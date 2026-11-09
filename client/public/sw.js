@@ -1,7 +1,7 @@
 // Service worker KAMBE: hanya menyimpan cangkang aplikasi (HTML/JS/CSS/ikon)
 // supaya bisa di-install & cepat dibuka. API dan WebSocket TIDAK pernah di-cache —
 // data percakapan tidak boleh tertinggal di cache browser.
-const CACHE = "kambe-shell-v1";
+const CACHE = "kambe-shell-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(["/", "/icon.svg", "/manifest.webmanifest"])));
@@ -39,4 +39,36 @@ self.addEventListener("fetch", (event) => {
       ),
     );
   }
+});
+
+// Web Push: "SSSSSTTT!! Pesan baru dari …" (tanpa isi pesan — isi tetap end-to-end terenkripsi).
+const SST_VIBRATE = [40, 25, 40, 25, 40, 25, 220];
+self.addEventListener("push", (event) => {
+  let d = {};
+  try {
+    d = event.data ? event.data.json() : {};
+  } catch {
+    d = {};
+  }
+  event.waitUntil(
+    self.registration.showNotification(String(d.title || "SSSSSTTT!!").slice(0, 60), {
+      body: String(d.body || "Pesan baru").slice(0, 120),
+      tag: String(d.tag || "kambe"),
+      renotify: true,
+      icon: "/icon.svg",
+      badge: "/icon.svg",
+      vibrate: SST_VIBRATE,
+      data: { url: "/" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) => {
+      const w = wins.find((x) => "focus" in x);
+      return w ? w.focus() : self.clients.openWindow("/");
+    }),
+  );
 });

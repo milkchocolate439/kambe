@@ -48,7 +48,7 @@ export function PanicWipeButton({ deletePassphrase }: { deletePassphrase?: strin
       className="btn danger block panic-hold"
       style={{ ["--hold" as string]: `${Math.round(progress * 100)}%` }}
       disabled={running}
-      aria-label="Panic Wipe: tahan 2 detik untuk menghapus semua jejak di perangkat ini"
+      aria-label="Panic Wipe: tahan 2 detik untuk menghapus semua data di perangkat ini"
       onPointerDown={begin}
       onPointerUp={cancel}
       onPointerLeave={cancel}

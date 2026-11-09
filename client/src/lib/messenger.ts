@@ -53,6 +53,8 @@ import { findContactLeak, LEAK_MESSAGE } from "../../../shared/contactguard.ts";
 import { encodePayInfo, PAY_METHODS_MAX, validatePayMethod, type PayMethod } from "../../../shared/payinfo.ts";
 import { decryptAttachment, encryptAttachment, validateRef, type AttachMime, type AttachmentRef } from "../../../shared/attach.ts";
 import { fromB64, toB64 } from "../../../shared/e2ee.ts";
+import { playSst, SST_VIBRATE } from "./sound.ts";
+import { resyncPush } from "./push.ts";
 import { api, ApiError } from "./api.ts";
 import { keystore, type LocalMessage, type PinnedKey, type UnlockedDevice } from "./keystore.ts";
 import { BACKUP_MAX_BYTES, decryptBackup, encryptBackup } from "../../../shared/vault.ts";
@@ -332,6 +334,7 @@ export class Messenger {
   async start() {
     await this.setupDevice();
     if (this.state.device === "ok") await this.ensureSignKey().catch(() => {});
+    void resyncPush();
     this.rt.start();
     await Promise.all([this.refreshContacts(), this.loadMyStore(), this.loadConfig()]);
     document.addEventListener("visibilitychange", this.onVisible);
@@ -1455,7 +1458,7 @@ export class Messenger {
     const myKey = this.identity!.publicKey;
     const env: Envelope = { id: crypto.randomUUID(), from: { id: this.state.me.id, publicKey: myKey }, to: { id: c.id, publicKey: c.publicKey! } };
     const box = await encryptPayload(await this.conversationKey(myKey, c.id, c.publicKey!), env, { kind: "ctl", ctl });
-    const ev = { t: "send" as const, id: env.id, to: c.id, fromKey: myKey, toKey: c.publicKey!, ...box, ping: false };
+    const ev = { t: "send" as const, id: env.id, to: c.id, fromKey: myKey, toKey: c.publicKey!, ...box, ping: false, quiet: true };
     this.outbox.set(env.id, ev);
     this.rt.send(ev);
     return true;
@@ -1653,6 +1656,7 @@ export class Messenger {
         }
         if (!mine) {
           const c = this.contact(peer);
+          this.alertIncoming(peer, msg.kind);
           if (this.state.activePeer === peer && document.visibilityState === "visible") this.markRead(peer);
           else if (c) this.set({ contacts: this.state.contacts.map((x) => (x.id === peer ? { ...x, unread: x.unread + 1, lastMessageAt: m.createdAt } : x)) });
           if (msg.kind === "ping") this.showPing(peer);
@@ -1719,6 +1723,26 @@ export class Messenger {
       case "hello":
         break;
     }
+  }
+
+  /** Pesan masuk saat KAMBE terbuka: bunyi "SSSSSTTT!!" + popup bila jendela tidak terlihat. */
+  private alertIncoming(peer: string, kind: ChatMessage["kind"]) {
+    playSst();
+    if (document.visibilityState !== "hidden" || !("Notification" in window) || Notification.permission !== "granted") return;
+    const alias = this.contact(peer)?.alias ?? "kontak";
+    navigator.serviceWorker
+      ?.getRegistration()
+      .then((r) =>
+        r?.showNotification("SSSSSTTT!!", {
+          body: kind === "ping" ? `PING!!! dari ${alias}` : `Pesan baru dari ${alias}`,
+          tag: `kambe-${peer}`,
+          icon: "/icon.svg",
+          badge: "/icon.svg",
+          data: { url: "/" },
+          ...({ renotify: true, vibrate: SST_VIBRATE } as object),
+        }),
+      )
+      .catch(() => {});
   }
 
   private sortContacts(peer: string, at: number) {

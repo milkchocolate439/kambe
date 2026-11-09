@@ -7,6 +7,11 @@ import { Icon } from "./icons.tsx";
 import { Logo } from "./Logo.tsx";
 import { VaultPanel } from "./Vault.tsx";
 import { PanicWipeButton } from "./Panic.tsx";
+import { MyPinCard } from "./Sidebar.tsx";
+import { RadarCard } from "./Discovery.tsx";
+import { NotifySwitch } from "./Notify.tsx";
+import { playSst, setSoundEnabled, soundEnabled } from "../lib/sound.ts";
+import { disablePush } from "../lib/push.ts";
 
 type Run = (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
 
@@ -37,13 +42,14 @@ function PmForm({ initial, run, busy }: { initial: string; run: Run; busy: boole
   );
 }
 
-export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSignedOut: (reason: string) => void }) {
+export function Settings({ onClose, onSignedOut, onOpenJejak }: { onClose: () => void; onSignedOut: (reason: string) => void; onOpenJejak: () => void }) {
   const [s, m] = useMessenger();
   const [blocked, setBlocked] = useState<{ id: string; alias: string }[] | null>(null);
   const [danger, setDanger] = useState<null | "delete">(null);
   const [pass, setPass] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sound, setSound] = useState(soundEnabled);
 
   useEffect(() => {
     void api<{ blocked: { id: string; alias: string }[] }>("GET", "/api/blocks").then((r) => setBlocked(r.blocked)).catch(() => setBlocked([]));
@@ -63,14 +69,28 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
   }
 
   return (
-    <Modal title="Pengaturan & privasi" onClose={onClose}>
+    <Modal title="Profil" onClose={onClose}>
       <div className="stack" style={{ gap: 16 }}>
+        <MyPinCard />
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn grow" onClick={() => { onClose(); onOpenJejak(); }}>
+            <Icon name="planet" /> Jejak
+          </button>
+        </div>
+        <RadarCard />
+        <div className="row">
+          <div className="grow" style={{ fontWeight: 600 }}>Suara SSSSSTTT!!</div>
+          <button className="btn ghost icon" aria-label="Coba suara" onClick={() => playSst(true)}>
+            <Icon name="vibrate" />
+          </button>
+          <Switch checked={sound} label="Suara pesan masuk" onChange={(v) => { setSoundEnabled(v); setSound(v); }} />
+        </div>
+        <NotifySwitch />
         <PmEditor run={run} busy={busy} />
 
         <div className="row">
           <div className="grow">
             <div style={{ fontWeight: 600 }}>Kirim tanda dibaca (R)</div>
-            <div className="hint">Kalau dimatikan, kontak hanya melihat "D" (diterima) untuk pesan mereka.</div>
           </div>
           <Switch checked={s.me.readReceipts} label="Kirim tanda dibaca" onChange={(v) => void run(() => m.updateSettings({ readReceipts: v }))} />
         </div>
@@ -78,7 +98,6 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
         <div className="row">
           <div className="grow">
             <label htmlFor="pin-rotate" style={{ fontWeight: 600 }}>Ganti PIN Kambe otomatis</label>
-            <div className="hint">PIN lama berhenti berlaku; kontak yang sudah terhubung tidak terputus.</div>
           </div>
           <select
             id="pin-rotate"
@@ -131,13 +150,12 @@ export function Settings({ onClose, onSignedOut }: { onClose: () => void; onSign
         <div className="divider" />
 
         <div className="stack">
-          <button className="btn block" disabled={busy} onClick={() => void run(async () => { await api("POST", "/api/auth/logout"); onSignedOut("logout"); })}>
+          <button className="btn block" disabled={busy} onClick={() => void run(async () => { await disablePush(); await api("POST", "/api/auth/logout"); onSignedOut("logout"); })}>
             <Icon name="logout" /> Keluar dari perangkat ini
           </button>
-          <button className="btn block" disabled={busy} onClick={() => void run(async () => { await api("POST", "/api/auth/logout-all"); onSignedOut("logout_all"); })}>
+          <button className="btn block" disabled={busy} onClick={() => void run(async () => { await disablePush(); await api("POST", "/api/auth/logout-all"); onSignedOut("logout_all"); })}>
             <Icon name="logout" /> Keluar dari semua perangkat
           </button>
-          <span className="hint">Saat keluar, kunci enkripsi yang terbuka dihapus dari perangkat ini. Riwayat tetap ada tapi terkunci — terbuka lagi saat kamu masuk dengan passphrase.</span>
           <button className="btn danger block" onClick={() => setDanger("delete")}>
             <Icon name="trash" /> Hapus akun permanen
           </button>

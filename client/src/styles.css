@@ -434,3 +434,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .shutter { width: 64px; height: 64px; border-radius: 50%; border: 4px solid var(--text); background: var(--brand); box-shadow: 0 0 0 3px var(--bg); }
 .shutter:disabled { opacity: 0.4; }
 .pay-box { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--glass); border: 1px solid var(--glass-line); }
+
+/* v3 minimalis: dock ikon saja */
+.dock-label { display: none !important; }
+.dock-btn { min-width: 52px; }

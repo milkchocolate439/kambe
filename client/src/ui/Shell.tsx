@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { MomentsView } from "./Moments.tsx";
 import { useMessenger, Toasts, copyText } from "./common.tsx";
-import { Sidebar } from "./Sidebar.tsx";
+import { AddContactModal, Sidebar } from "./Sidebar.tsx";
+import { NotifyButton } from "./Notify.tsx";
 import { Chat } from "./Chat.tsx";
 import { Settings } from "./Settings.tsx";
 import { StoreModal } from "./Commerce.tsx";
@@ -16,6 +17,7 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
   const [mod, setMod] = useState(false);
   const [reclaiming, setReclaiming] = useState(false);
   const [moments, setMoments] = useState(false);
+  const [adding, setAdding] = useState(false);
   const unreadTotal = s.contacts.reduce((n, c) => n + c.unread, 0) + s.incoming.length;
   // Membuka obrolan dari daftar kontak otomatis keluar dari tampilan Jejak.
   useEffect(() => {
@@ -31,19 +33,12 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
     void m.openThread(null);
     setMoments(false);
   };
-  const addContact = () => {
-    goChats();
-    setTimeout(() => {
-      document.getElementById("invite-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-      document.querySelector<HTMLInputElement>("#invite-card input")?.focus({ preventScroll: true });
-    }, 60);
-  };
+  const addContact = () => setAdding(true);
 
   return (
     <div className={"app" + (s.activePeer || moments ? " in-chat" : "")}>
       <header className="topbar">
         <Logo size={28} />
-        <span className="brand hide-mobile">KAMBE</span>
         <button
           className="badge pin"
           style={{ fontSize: 13, padding: "4px 10px", cursor: "pointer" }}
@@ -52,27 +47,13 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
         >
           <Icon name="key" size={13} /> {s.me.pin}
         </button>
-        <span className="badge ok hide-mobile" title="End-to-end encrypted">
-          <Icon name="shieldCheck" size={13} /> E2EE
-        </span>
         <span className="grow" />
         {unreadTotal > 0 && <span className="count only-mobile">{unreadTotal}</span>}
         <span className="conn" aria-live="polite">
           <span className={`dot ${s.conn}`} />
-          <span className="hide-mobile">{s.conn === "online" ? "Tersambung" : s.conn === "connecting" ? "Menyambung…" : "Offline"}</span>
+          <span className="sr-only">{s.conn === "online" ? "Tersambung" : s.conn === "connecting" ? "Menyambung…" : "Offline"}</span>
         </span>
-        <button
-          className={`btn ${moments ? "primary" : "ghost"} icon tb-action`}
-          onClick={() => {
-            void m.openThread(null);
-            setMoments(!moments);
-          }}
-          aria-label="Jejak"
-          aria-pressed={moments}
-          title="Jejak"
-        >
-          <Icon name="planet" />
-        </button>
+        <NotifyButton />
         {s.me.isModerator && (
           <button className="btn ghost icon tb-action" onClick={() => setMod(true)} aria-label="Moderasi sengketa" title="Moderasi sengketa" style={{ color: "var(--brand-2)" }}>
             <Icon name="shieldCheck" />
@@ -120,39 +101,31 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
       {s.conn === "offline" && s.device === "ok" && (
         <div className="banner warn">
           <Icon name="wifiOff" />
-          <span className="small">Offline. Pesan yang kamu tulis akan terkirim otomatis saat tersambung lagi.</span>
+          <span className="small">Offline</span>
         </div>
       )}
 
       <div className={`layout ${s.activePeer || moments ? "chat-open" : ""}`}>
-        <Sidebar onOpenJejak={openJejak} />
+        <Sidebar onAddContact={addContact} />
         {moments ? <MomentsView onBack={() => setMoments(false)} /> : <Chat />}
       </div>
 
       {/* Dock HP: navigasi pil melayang + tombol tambah (hanya di layar daftar; saat chat terbuka, topbar yang dipakai). */}
       <nav className="dock only-mobile" aria-label="Navigasi utama">
         <div className="dock-pill">
-          <button className={"dock-btn" + (!moments ? " on" : "")} aria-label="Obrolan" aria-current={!moments} onClick={goChats}>
+          <button className="dock-btn on" aria-label="Obrolan" aria-current="page" onClick={goChats}>
             <Icon name="inbox" size={20} />
-            <span className="dock-label" aria-hidden="true">Obrolan</span>
-          </button>
-          <button className={"dock-btn" + (moments ? " on" : "")} aria-label="Jejak" aria-pressed={moments} onClick={moments ? goChats : openJejak}>
-            <Icon name="planet" size={20} />
-            <span className="dock-label" aria-hidden="true">Jejak</span>
           </button>
           {s.me.isModerator && (
             <button className="dock-btn" aria-label="Moderasi sengketa" onClick={() => setMod(true)}>
               <Icon name="shieldCheck" size={20} />
-              <span className="dock-label" aria-hidden="true">Moderasi</span>
             </button>
           )}
           <button className="dock-btn" aria-label="Toko & Dompet" onClick={() => setStore(true)}>
             <Icon name={proBadge ? "crown" : "store"} size={20} />
-            <span className="dock-label" aria-hidden="true">Toko</span>
           </button>
           <button className="dock-btn" aria-label="Pengaturan" onClick={() => setSettings(true)}>
             <Icon name="settings" size={20} />
-            <span className="dock-label" aria-hidden="true">Profil</span>
           </button>
         </div>
         <button className="dock-fab" aria-label="Tambah kontak" onClick={addContact}>
@@ -160,7 +133,8 @@ export function Shell({ onSignedOut }: { onSignedOut: (reason: string) => void }
         </button>
       </nav>
 
-      {settings && <Settings onClose={() => setSettings(false)} onSignedOut={onSignedOut} />}
+      {settings && <Settings onClose={() => setSettings(false)} onSignedOut={onSignedOut} onOpenJejak={openJejak} />}
+      {adding && <AddContactModal onClose={() => setAdding(false)} />}
       {store && <StoreModal onClose={() => setStore(false)} />}
       {mod && <ModModal onClose={() => setMod(false)} />}
       <Toasts toasts={s.toasts} />

@@ -191,6 +191,7 @@ async function main() {
       for (const [p, teks] of [[b, "Jejak dari Bima"], [a, "Jejak dari Ayu"]] as const) {
         await p.goto(BASE);
         await p.locator(".dot.online").waitFor();
+        await p.getByRole("button", { name: "Pengaturan" }).click();
         await p.getByRole("button", { name: "Jejak" }).first().click();
         await p.getByLabel("Isi jejak").fill(teks);
         await p.getByRole("button", { name: "Bagikan" }).click();
@@ -202,6 +203,7 @@ async function main() {
 
       await a.goto(BASE);
       await a.locator(".dot.online").waitFor();
+      await a.getByRole("button", { name: "Pengaturan" }).click();
       await a.getByRole("button", { name: /^Radar Arwah/ }).first().click();
       await audit(a, `${width} radar-arwah`);
       await a.keyboard.press("Escape");

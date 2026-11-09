@@ -72,7 +72,7 @@ async function loginFreshDevice(page: Page, alias: string) {
   await page.getByText("Simpan frasa kunci perangkat").waitFor();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Frasa kunci sudah kusimpan" }).click();
-  await page.locator(".pin-big").waitFor();
+  await page.locator(".dot.online").waitFor(); // aplikasi siap (kartu PIN kini di Profil bila sudah punya kontak)
 }
 
 async function main() {

@@ -189,6 +189,8 @@ export type ClientEvent =
       nonce: string;
       ciphertext: string;
       ping: boolean;
+      /** Pesan kendali (etalase/Buku Jejak): jangan memicu notifikasi. */
+      quiet?: boolean;
     }
   | { t: "read"; peer: string; ids: string[] }
   | { t: "delivered"; ids: string[] };

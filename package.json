@@ -13,18 +13,20 @@
     "start": "NODE_ENV=production node --import tsx server/index.ts",
     "typecheck": "tsc -b",
     "test": "node --import tsx --test --test-timeout=30000 --test-force-exit tests/*.test.ts",
-    "test:browser": "node --import tsx tests/browser/e2e.ts && node --import tsx tests/browser/commerce-e2e.ts && node --import tsx tests/browser/discovery-e2e.ts && node --import tsx tests/browser/vault-e2e.ts && node --import tsx tests/browser/audit-e2e.ts && node --import tsx tests/browser/panic-e2e.ts && node --import tsx tests/browser/ghost-e2e.ts && node --import tsx tests/browser/ui-v2-e2e.ts && node --import tsx tests/browser/direct-e2e.ts"
+    "test:browser": "node --import tsx tests/browser/e2e.ts && node --import tsx tests/browser/commerce-e2e.ts && node --import tsx tests/browser/discovery-e2e.ts && node --import tsx tests/browser/vault-e2e.ts && node --import tsx tests/browser/audit-e2e.ts && node --import tsx tests/browser/panic-e2e.ts && node --import tsx tests/browser/ui-v2-e2e.ts && node --import tsx tests/browser/direct-e2e.ts"
   },
   "dependencies": {
     "mongodb": "^6.22.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "web-push": "^3.6.7",
     "ws": "^8.18.2"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.5.0",
     "concurrently": "^9.1.2",

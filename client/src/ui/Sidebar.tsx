@@ -1,40 +1,42 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { normalizePin, pinProblem } from "../../../shared/pin.ts";
 import { NOTE_MAX, type LabelContent, type NoteContent, type PmContent } from "../../../shared/protocol.ts";
 import { ApiError } from "../lib/api.ts";
 import { Avatar, copyText, Modal, SealedText, timeOf, useMessenger } from "./common.tsx";
 import { Icon } from "./icons.tsx";
-import { Logo, Wordmark } from "./Logo.tsx";
-import { RadarCard, ShadowPinModal } from "./Discovery.tsx";
+import { ShadowPinModal } from "./Discovery.tsx";
 
-export function Sidebar({ onOpenJejak }: { onOpenJejak: () => void }) {
+/** Minimalis: daftar obrolan (+ undangan masuk). Pengguna baru tanpa kontak: PIN & undang. */
+export function Sidebar({ onAddContact }: { onAddContact: () => void }) {
   const [s] = useMessenger();
-  // Sudah punya kontak → daftar obrolan di atas (seperti aplikasi chat); pengguna baru → kartu PIN dulu.
-  const chatsFirst = s.contacts.length > 0;
   return (
     <aside className="sidebar" aria-label="Kontak dan PIN Kambe">
-      {chatsFirst ? (
-        <>
-          <Requests />
-          <Contacts onOpenJejak={onOpenJejak} />
-          <MyPinCard />
-          <InviteCard />
-          <RadarCard />
-        </>
+      <Requests />
+      {s.contacts.length > 0 ? (
+        <Contacts onAddContact={onAddContact} />
       ) : (
         <>
           <MyPinCard />
           <InviteCard />
-          <RadarCard />
-          <Requests />
-          <Contacts onOpenJejak={onOpenJejak} />
         </>
       )}
     </aside>
   );
 }
 
-function MyPinCard() {
+/** Lembar "Tambah kontak": PIN sendiri untuk dibagikan + undang PIN orang lain. */
+export function AddContactModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="Tambah kontak" onClose={onClose}>
+      <div className="stack">
+        <MyPinCard compact />
+        <InviteCard />
+      </div>
+    </Modal>
+  );
+}
+
+export function MyPinCard({ compact = false }: { compact?: boolean }) {
   const [s, m] = useMessenger();
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [shadow, setShadow] = useState(false);
@@ -67,23 +69,18 @@ function MyPinCard() {
 
   return (
     <section className="card hero-card">
-      <div className="row">
+      {!compact && <div className="row">
         <Avatar id={s.me.id} name={s.me.alias} size={46} />
         <div className="grow">
           <div className="name truncate" style={{ fontWeight: 800 }}>{s.me.alias}</div>
           <div className="small muted truncate">
-            <SealedText<PmContent> view={s.me.pm} field="text" empty="Belum ada status" />
+            <SealedText<PmContent> view={s.me.pm} field="text" empty="" />
           </div>
         </div>
-      </div>
-      <div className="hero-mark compact">
-        <Logo size={28} />
-        <Wordmark className="hero-name" />
-        <div className="hero-title">Hadir tanpa jejak.</div>
-      </div>
+      </div>}
       <div className="id-card">
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="small">PIN Kambe untuk dibagikan:</span>
+          <span className="small">PIN Kambe</span>
           <div className="row" style={{ gap: 6 }}>
             {"share" in navigator && (
               <button className="btn ghost icon round" onClick={share} aria-label="Bagikan PIN Kambe" title="Bagikan PIN Kambe">
@@ -99,7 +96,6 @@ function MyPinCard() {
           {s.me.pin}
         </button>
       </div>
-      <div className="hint">PIN hanya untuk berbagi kontak — bukan kata sandi. Orang lain harus kamu setujui dulu.</div>
       <div className="row" style={{ marginTop: 10 }}>
         <button className="btn small grow" onClick={() => setShadow(true)}>
           <Icon name="clock" size={15} /> PIN Bayang 24 jam
@@ -157,10 +153,6 @@ function InviteCard() {
 
   return (
     <section className="card" id="invite-card">
-      <div className="or-divider" aria-hidden="true">atau</div>
-      <h3>
-        <Icon name="userPlus" size={14} /> Hubungkan via PIN
-      </h3>
       <form className="stack" onSubmit={submit}>
         <label className="contact-field">
           <span>PIN kontak</span>
@@ -184,19 +176,13 @@ function InviteCard() {
           className="input"
           value={note}
           onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))}
-          placeholder="Catatan singkat (opsional), mis. mau tanya stok kopi"
+          placeholder="Catatan (opsional)"
           aria-label="Catatan undangan"
         />
-        <span className="hint center">
-          Mulai obrolan baru dengan memasukkan PIN seseorang, atau <span className="accent">bagikan PIN Kambe-mu</span> kepadanya.
-        </span>
         {error && <span className="error" role="alert">{error}</span>}
         <button className="btn primary block pill" disabled={busy || !normalized}>
           {busy ? "…" : "Undang"}
         </button>
-        <span className="hint">
-          <Icon name="lock" size={12} /> Catatan <strong>terenkripsi end-to-end</strong> — hanya pemilik PIN yang bisa membacanya.
-        </span>
       </form>
     </section>
   );
@@ -297,42 +283,7 @@ function Requests() {
 
 type ChatFilter = "all" | "unread" | "verified" | "review";
 
-/** Baris "cerita" Jejak: kontak yang baru menulis di Jejak (cincin api) + tombol tulis sendiri. */
-function StoryRow({ onOpenJejak }: { onOpenJejak: () => void }) {
-  const [s, m] = useMessenger();
-  useEffect(() => {
-    if (!s.moments) void m.loadMoments().catch(() => {});
-  }, [m, s.moments]);
-  const authors = useMemo(() => {
-    const seen = new Map<string, { id: string; alias: string; at: number }>();
-    for (const mo of s.moments ?? []) {
-      if (mo.mine) continue;
-      const cur = seen.get(mo.authorId);
-      if (!cur || mo.createdAt > cur.at) seen.set(mo.authorId, { id: mo.authorId, alias: mo.authorAlias, at: mo.createdAt });
-    }
-    return [...seen.values()].sort((a, b) => b.at - a.at).slice(0, 12);
-  }, [s.moments]);
-  return (
-    <div className="stories" role="group" aria-label="Cerita terbaru">
-      <button className="story" onClick={onOpenJejak} aria-label="Cerita baru">
-        <span className="story-ring add" aria-hidden="true">
-          <Icon name="plus" size={20} />
-        </span>
-        <span className="story-name" aria-hidden="true">Kamu</span>
-      </button>
-      {authors.map((a, i) => (
-        <button key={a.id} className="story" onClick={onOpenJejak} aria-label={"Cerita ke-" + (i + 1)}>
-          <span className="story-ring live" aria-hidden="true">
-            <Avatar id={a.id} name={a.alias} size={46} />
-          </span>
-          <span className="story-name truncate" aria-hidden="true">{a.alias}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Contacts({ onOpenJejak }: { onOpenJejak: () => void }) {
+function Contacts({ onAddContact }: { onAddContact: () => void }) {
   const [s, m] = useMessenger();
   const [filter, setFilter] = useState<ChatFilter>("all");
   const [searching, setSearching] = useState(false);
@@ -354,23 +305,19 @@ function Contacts({ onOpenJejak }: { onOpenJejak: () => void }) {
     <section className="chats" aria-label="Obrolan terenkripsi">
       <div className="chats-head">
         <h2>Obrolan</h2>
-        <span className="small muted grow">{s.contacts.length} kontak</span>
+        <span className="grow" />
         <button className={"btn round glass icon " + (searching ? "on" : "")} aria-label="Cari obrolan" aria-pressed={searching} onClick={() => { setSearching((v) => !v); setQuery(""); }}>
           <Icon name="search" size={18} />
         </button>
         <button
           className="btn round glass icon hide-mobile"
           aria-label="Tambah kontak"
-          onClick={() => {
-            document.getElementById("invite-card")?.scrollIntoView({ behavior: "smooth", block: "center" });
-            document.querySelector<HTMLInputElement>("#invite-card input")?.focus({ preventScroll: true });
-          }}
+          onClick={onAddContact}
         >
           <Icon name="userPlus" size={18} />
         </button>
       </div>
       {searching && <input className="input" autoFocus value={query} maxLength={40} onChange={(e) => setQuery(e.target.value)} placeholder="Cari nama kontak…" aria-label="Cari nama kontak" />}
-      <StoryRow onOpenJejak={onOpenJejak} />
       <div className="chips" role="group" aria-label="Saring obrolan">
         {chips.map(([k, label]) => (
           <button key={k} className="chip" aria-pressed={filter === k} onClick={() => setFilter(k)}>
@@ -383,7 +330,6 @@ function Contacts({ onOpenJejak }: { onOpenJejak: () => void }) {
           <div className="icon-wrap">
             <Icon name="userPlus" size={26} />
           </div>
-          <div className="small">Belum ada kontak. Bagikan PIN Kambe-mu atau undang PIN orang lain.</div>
         </div>
       ) : shown.length === 0 ? (
         <div className="empty">

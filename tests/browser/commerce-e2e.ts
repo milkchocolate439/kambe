@@ -67,8 +67,8 @@ async function main() {
         await new Promise((r) => setTimeout(r, 200));
       }
     }
-    browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? "/usr/bin/chromium", args: ["--no-sandbox"] });
-    const seller = await (await browser.newContext({ viewport: { width: 1280, height: 860 }, colorScheme: "dark" })).newPage();
+    browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? "/usr/bin/chromium", args: ["--no-sandbox", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
+    const seller = await (await browser.newContext({ viewport: { width: 1280, height: 860 }, colorScheme: "dark", permissions: ["camera"] })).newPage();
     const buyer = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage();
     for (const [p, n] of [[seller, "seller"], [buyer, "buyer"]] as const) {
       p.on("console", (msg) => msg.type() === "error" && problems.push(`[${n}] ${msg.text()}`));
@@ -88,8 +88,12 @@ async function main() {
     await seller.getByText(/Aktif sampai/).waitFor();
     check(true, "penjual mengaktifkan PRO (simulasi)");
     await seller.getByRole("tab", { name: "Etalase" }).click();
-    await seller.getByRole("button", { name: "Tambah produk / jasa" }).click();
-    await seller.getByLabel("Nama produk / jasa").fill("Arabica Gayo Wine 5 Kg");
+    await seller.getByRole("button", { name: "Tambah barang" }).click();
+    await seller.getByRole("button", { name: "Ambil foto" }).click();
+    await seller.waitForFunction(() => (document.querySelector("video.camera-view") as HTMLVideoElement | null)?.videoWidth! > 0, null, { timeout: 15000 });
+    await seller.getByRole("button", { name: "Ambil foto" }).last().click();
+    await seller.locator(".photo-thumb img").first().waitFor();
+    await seller.getByLabel("Nama barang").fill("Arabica Gayo Wine 5 Kg");
     await seller.getByLabel("Harga").fill("850000");
     check((await seller.getByLabel("Harga").inputValue()) === "850.000", "input harga diformat rupiah otomatis");
     await seller.getByLabel("Deskripsi (opsional)").fill("Panen terbaru, roast medium");

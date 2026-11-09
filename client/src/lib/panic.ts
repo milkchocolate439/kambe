@@ -10,6 +10,7 @@
 
 import { api } from "./api.ts";
 import { keystore } from "./keystore.ts";
+import { disablePush } from "./push.ts";
 
 export const WIPED_HASH = "#jejak-dihapus";
 export const WIPED_SERVER_HASH = "#akun-dihapus";
@@ -29,6 +30,9 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  */
 export async function panicWipe(deletePassphrase?: string): Promise<PanicReport> {
   const report: PanicReport = { server: "failed", local: [] };
+
+  // 0) Berhenti menerima popup notifikasi di perangkat ini.
+  await withTimeout(disablePush(), 3000).catch(() => {});
 
   // 1) Server: hapus akun (bila diminta) atau cabut sesi. Maks. 3 detik — jangan menahan penghapusan lokal.
   if (deletePassphrase) {

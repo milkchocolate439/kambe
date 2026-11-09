@@ -51,10 +51,10 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 ## Pengujian
 
 ```bash
-pnpm test           # 158 tes: kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
+pnpm test           # 167 tes: kriptografi, sealed object, brankas/frasa kunci/cadangan, API/WebSocket, uang/rekber,
                     # sengketa/moderator, PIN Bayang/Radar Arwah, Jejak, notaris (server sungguhan, DB di memori),
                     # env KAMBE_*/PINPATH_*, kompatibilitas data era PINPath + regresi red-team
-pnpm build && pnpm test:browser   # 9 suite Chromium headless: chat, rekber(dorman)+moderator, Fase 3, brankas, audit HP, Panic Wipe, Etalase Hantu, UI v2, kesepakatan langsung
+pnpm build && pnpm test:browser   # 8 suite Chromium headless: chat, rekber(dorman)+moderator, Fase 3, brankas, audit HP, Panic Wipe, UI v2 (+suara & push), kesepakatan langsung (alur tegas + kamera)
 ```
 
 Tes browser mencakup: undangan PIN, chat E2EE, status D/R, PING!!!, safety number,
@@ -79,6 +79,19 @@ Rancangan lengkap: [`docs/superpowers/specs/2026-11-09-kambe-v2-design.md`](docs
 Catatan jujur: Etalase Hantu hanya bisa dilihat saat HP penjual menyala (pesan menunggu di relay hingga 30 hari); perangkat
 yang sudah terbuka sebelum v2 diminta masuk ulang sekali (untuk membuat kunci tanda tangan); Panic Wipe tidak bisa menghapus
 salinan di HP lawan bicara.
+
+## KAMBE v3 (9 Nov 2026)
+
+| Fitur | Ringkas |
+|---|---|
+| **Alur transaksi tegas** | Tawaran → **penjual wajib kirim rekening** (tersegel, melekat di kesepakatan) → baru pembeli bisa **"Sudah bayar"**, dan HANYA lewat **form bukti** (asal, pengirim, nominal, waktu, ref) + **≥ 1 foto bukti** yang dienkripsi di HP. Ditegakkan server (unggah bukti pun ditolak sebelum rekening ada) |
+| **Etalase 3 barang** | Maks. 3 barang, masing-masing **wajib 1 foto** yang diambil lewat **kamera di aplikasi** (tanpa pilih-berkas/galeri). Foto terenkripsi, hanya kontak yang bisa melihat |
+| **Lampiran terenkripsi** | `shared/attach.ts` + `server/attachments.ts`: AES-256-GCM per foto, kunci di isi tersegel; server/MongoDB hanya melihat blob acak. Bukti dihapus 30 hari setelah kesepakatan ditutup |
+| **SSSSSTTT!!** | Bunyi desis khas (Web Audio, tanpa berkas) + getaran saat pesan masuk. Popup **Web Push** "SSSSSTTT!! Pesan baru dari {alias}" saat aplikasi tertutup (tanpa isi pesan; VAPID dari `KAMBE_NOTARY_SEED`) |
+| **UI minimalis** | Layar utama = obrolan & dagang; navigasi ikon saja; PIN, Jejak, Radar, PIN Bayang, suara & notifikasi di **Profil** |
+
+Batas jujur: suara kustom hanya saat KAMBE terbuka — popup sistem saat tertutup memakai bunyi bawaan HP (browser tidak
+mengizinkan suara kustom pada notifikasi). Untuk aplikasi yang benar-benar hidup di latar belakang: lihat `android/README.md`.
 
 ## Model keamanan
 

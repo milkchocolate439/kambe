@@ -12,6 +12,8 @@ import { createNotary } from "./notary.ts";
 import { createSealedStore } from "./sealed.ts";
 import { simulatedProvider, type PaymentProvider } from "./payments.ts";
 import { registerAttachments } from "./attachments.ts";
+import { registerPush, type PushSender, type VapidKeys } from "./push.ts";
+import webpush from "web-push";
 import type { KeyObject } from "node:crypto";
 import {
   FailureBackoff,
@@ -62,6 +64,12 @@ export interface AppOptions {
   moderators?: string[];
   /** Kunci privat Ed25519 notaris kuitansi. Kosong = kunci sementara (hanya untuk tes). */
   notaryKey?: KeyObject;
+  /** Kunci VAPID Web Push. Kosong = kunci sementara (tes). */
+  vapid?: VapidKeys;
+  /** Subjek VAPID (URL publik / mailto). */
+  pushSubject?: string;
+  /** Pengirim push tiruan untuk tes. */
+  pushSender?: PushSender;
   /** Fee platform per seribu (default 50 = 5%; maks. 200 = 20%). */
   feePerMille?: number;
   /** Penyedia pembayaran. Default: simulasi (tanpa uang sungguhan). Server produk memakai "langsung" (lihat index.ts). */
@@ -905,6 +913,12 @@ export function createApp(opts: AppOptions) {
 
   // ---- Fase 2: etalase, kesepakatan rekber (simulasi), buku besar ----
 
+  const push = registerPush({
+    db, route, authed, readJson, limit, log,
+    vapid: opts.vapid ?? webpush.generateVAPIDKeys(),
+    subject: opts.pushSubject ?? "https://github.com/milkchocolate439/kambe",
+    sender: opts.pushSender,
+  });
   const attachments = registerAttachments({ db, route, authed, readJson, limit, areContacts, isModerator });
   const commerce = registerCommerce({
     attach: attachments,
@@ -1156,7 +1170,8 @@ export function createApp(opts: AppOptions) {
         ev.ciphertext.length === 0 ||
         ev.ciphertext.length > CIPHERTEXT_MAX_B64 ||
         !B64_RE.test(ev.ciphertext) ||
-        typeof ev.ping !== "boolean"
+        typeof ev.ping !== "boolean" ||
+        (ev.quiet !== undefined && typeof ev.quiet !== "boolean")
       ) {
         return reject(ws, id, "bad_message", "Format pesan tidak valid");
       }
@@ -1189,6 +1204,14 @@ export function createApp(opts: AppOptions) {
       const stored = toMessage(db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as Row, peer.read_receipts === 1);
       ws.send(JSON.stringify({ t: "ack", id, createdAt, status: "S" } satisfies ServerEvent));
       emit(peer.id, { t: "message", message: stored });
+      // Penerima tidak tersambung → popup Web Push "SSSSSTTT!!" (tanpa isi; pesan kendali tidak memicu).
+      if (!ev.quiet && !sockets.get(peer.id)?.size) {
+        void push.notify(
+          peer.id,
+          { title: "SSSSSTTT!!", body: ev.ping ? `PING!!! dari ${me.alias}` : `Pesan baru dari ${me.alias}`, tag: `kambe-${userId}`, url: "/" },
+          userId,
+        );
+      }
       // Sinkronkan tab lain milik pengirim.
       const set = sockets.get(userId);
       if (set) for (const other of set) if (other !== ws && other.readyState === WebSocket.OPEN) other.send(JSON.stringify({ t: "message", message: stored }));
@@ -1294,6 +1317,7 @@ export function createApp(opts: AppOptions) {
     runPinRotation,
     /** Sapuan retensi pesan (dipakai janitor & tes). */
     runRetention,
+    push,
     notaryPublicKey: notary.publicKey,
     /** Ganti daftar moderator (ID akun) saat berjalan — dipakai tes; produksi memakai env saat start. */
     setModerators(ids: string[]) {

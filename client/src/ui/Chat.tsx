@@ -83,9 +83,6 @@ export function Chat() {
             <Icon name="shieldCheck" size={28} />
           </div>
           <h2 style={{ margin: "0 0 6px", fontSize: 18, color: "var(--text)" }}>Pilih obrolan</h2>
-          <div className="small" style={{ maxWidth: 360 }}>
-            Setiap pesan dikunci di perangkatmu dengan enkripsi end-to-end. Server KAMBE hanya meneruskan data acak yang tidak bisa dibaca siapa pun.
-          </div>
         </div>
       </div>
     );
@@ -236,12 +233,7 @@ export function Chat() {
             <div className="icon-wrap">
               <Icon name="lock" size={26} />
             </div>
-            <div className="small" style={{ maxWidth: 340 }}>
-              Kamu terhubung dengan <strong>{contact.alias}</strong>. Pesan di sini terenkripsi end-to-end.
-              <br />
-              <br />
-              <Icon name="alert" size={13} /> Bertransaksi lewat kartu kesepakatan supaya tercatat. Nomor HP & kontak luar tidak bisa dibagikan di KAMBE. Jangan pernah bagikan OTP.
-            </div>
+
           </div>
         )}
         {shown.map((item, i) => {

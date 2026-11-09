@@ -4,6 +4,7 @@ import { createApp } from "./app.ts";
 import { defaultDbPath, readEnv, staticDirFor } from "./env.ts";
 import { loadNotaryKey, notaryKeyFromSeed } from "./notary.ts";
 import { directProvider, simulatedProvider, xenditProvider, type PaymentProvider } from "./payments.ts";
+import { vapidFromFile, vapidFromSeed } from "./push.ts";
 import { mongoSnapshotStore, restoreSnapshot, snapshotKey, Snapshotter, type SnapshotStore } from "./snapshot.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,6 +57,9 @@ if (mongoUri) {
 
 const app = createApp({
   dbPath,
+  // Kunci VAPID Web Push: dari seed notaris (stabil tanpa disk) atau berkas di samping database.
+  vapid: readEnv(env, "NOTARY_SEED") ? vapidFromSeed(readEnv(env, "NOTARY_SEED")!) : vapidFromFile(join(dirname(dbPath), "vapid.json")),
+  pushSubject: readEnv(env, "PUBLIC_URL"),
   staticDir: staticDirFor(env, root),
   secure: readEnv(env, "SECURE") === "1",
   trustProxy: readEnv(env, "TRUST_PROXY") === "1",

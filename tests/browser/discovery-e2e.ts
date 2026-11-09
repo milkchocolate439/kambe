@@ -83,12 +83,15 @@ async function main() {
     check(!(await bima.content()).includes(ayuPin), "PIN utama ayu TIDAK pernah muncul di layar bima");
 
     // --- Radar Arwah: hanya peserta yang saling melihat, memakai PIN radar ---
+    await ayu.getByRole("button", { name: "Pengaturan" }).click(); // Radar Arwah ada di Profil (UI minimalis)
     await ayu.getByRole("button", { name: /^Radar Arwah/ }).click();
     await ayu.getByLabel("Kebutuhan atau tawaran").fill("Jual rotan mentah Katingan 2 ton");
     await ayu.getByRole("button", { name: "Ikut Radar Arwah 7 hari" }).click();
     await ayu.getByText(/PIN radar/).waitFor();
     check(true, "ayu ikut radar (opt-in) dan mendapat PIN radar");
+    await ayu.keyboard.press("Escape");
 
+    await citra.getByRole("button", { name: "Pengaturan" }).click();
     await citra.getByRole("button", { name: /^Radar Arwah/ }).click();
     await citra.getByText(/Hanya sesama peserta Radar Arwah/).waitFor();
     check(true, "radar menjelaskan aturan privasi sebelum ikut");
@@ -100,12 +103,14 @@ async function main() {
     check(!(await citra.content()).includes(ayuPin), "radar citra tidak menampilkan PIN utama ayu");
     await citra.screenshot({ path: join(OUT, "d2-radar.png") });
     await entry.getByRole("button", { name: "Undang" }).click();
+    await citra.keyboard.press("Escape");
     await ayu.getByText(/Lewat Radar Arwah/).waitFor();
     check(true, "undangan dari radar ditandai 'lewat radar' untuk ayu");
     await ayu.getByRole("button", { name: "Terima" }).click();
     await citra.getByRole("button", { name: /Ayu_Rotan/ }).waitFor();
 
     // --- Jejak: dienkripsi per kontak, reaksi real-time ---
+    await ayu.getByRole("button", { name: "Pengaturan" }).click(); // Jejak ada di Profil
     await ayu.getByRole("button", { name: "Jejak" }).click();
     await ayu.getByRole("radio", { name: /Tempat/ }).click();
     await ayu.getByLabel("Isi jejak").fill("Di gudang Sampit, stok rotan baru datang");
@@ -113,6 +118,7 @@ async function main() {
     await ayu.getByRole("button", { name: "Bagikan" }).click();
     await ayu.locator(".moment", { hasText: "Di gudang Sampit" }).waitFor();
 
+    await bima.getByRole("button", { name: "Pengaturan" }).click();
     await bima.getByRole("button", { name: "Jejak" }).click();
     const bimaMoment = bima.locator(".moment", { hasText: "Di gudang Sampit" });
     await bimaMoment.waitFor();

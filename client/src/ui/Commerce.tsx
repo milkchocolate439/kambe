@@ -631,10 +631,12 @@ export function StoreModal({ onClose, initial = "pro" }: { onClose: () => void; 
   return (
     <Modal title="Toko & Dompet" onClose={onClose}>
       <div className="stack">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="small muted">{direct ? "KAMBE gratis. Pembayaran langsung antarpengguna — KAMBE tidak memegang dana." : "Fitur dagang masih tahap uji — tidak ada uang sungguhan."}</span>
-          <SimBadge />
-        </div>
+        {!direct && (
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <span className="small muted">Fitur dagang masih tahap uji — tidak ada uang sungguhan.</span>
+            <SimBadge />
+          </div>
+        )}
         <div className="tabs" role="tablist" style={{ gridTemplateColumns: `repeat(${tabs.length}, 1fr)` }}>
           {tabs.map(([t, label]) => (
             <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
