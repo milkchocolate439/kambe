@@ -8,3 +8,4 @@ notary.key
 .claude
 tests/browser/out
 .git
+dist-server

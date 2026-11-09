@@ -9,8 +9,9 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,web \"node --import tsx --watch server/index.ts\" \"vite\"",
-    "build": "tsc -b && vite build",
-    "start": "NODE_ENV=production node --import tsx server/index.ts",
+    "build": "tsc -b && vite build && pnpm run build:server",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --target=node24 --outfile=dist-server/index.mjs --log-level=warning",
+    "start": "NODE_ENV=production node dist-server/index.mjs",
     "typecheck": "tsc -b",
     "test": "node --import tsx --test --test-timeout=30000 --test-force-exit tests/*.test.ts",
     "test:browser": "node --import tsx tests/browser/e2e.ts && node --import tsx tests/browser/commerce-e2e.ts && node --import tsx tests/browser/discovery-e2e.ts && node --import tsx tests/browser/vault-e2e.ts && node --import tsx tests/browser/audit-e2e.ts && node --import tsx tests/browser/panic-e2e.ts && node --import tsx tests/browser/ui-v2-e2e.ts && node --import tsx tests/browser/direct-e2e.ts"
@@ -30,6 +31,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.5.0",
     "concurrently": "^9.1.2",
+    "esbuild": "0.28.2",
     "playwright-core": "^1.53.0",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3",
