@@ -101,3 +101,21 @@ test("pesan ke penerima OFFLINE → popup 'SSSSSTTT!! Pesan baru dari {alias}' t
   sa.ws.close();
   await app.close();
 });
+
+test("assetlinks.json: hanya muncul bila APK dikonfigurasi; isinya paket + sidik sertifikat", async () => {
+  const off = createApp({ dbPath: ":memory:" });
+  await new Promise<void>((r) => off.server.listen(0, "127.0.0.1", () => r()));
+  const offBase = `http://127.0.0.1:${(off.server.address() as AddressInfo).port}`;
+  assert.equal((await fetch(offBase + "/.well-known/assetlinks.json")).status, 404, "tanpa konfigurasi = tidak ada");
+  await off.close();
+  const sha = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
+  const on = createApp({ dbPath: ":memory:", androidApp: { packageName: "app.kambe.twa", sha256: [sha] } });
+  await new Promise<void>((r) => on.server.listen(0, "127.0.0.1", () => r()));
+  const r = await fetch(`http://127.0.0.1:${(on.server.address() as AddressInfo).port}/.well-known/assetlinks.json`);
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body[0].target.package_name, "app.kambe.twa");
+  assert.deepEqual(body[0].target.sha256_cert_fingerprints, [sha]);
+  assert.deepEqual(body[0].relation, ["delegate_permission/common.handle_all_urls"]);
+  await on.close();
+});

@@ -70,6 +70,8 @@ export interface AppOptions {
   pushSubject?: string;
   /** Pengirim push tiruan untuk tes. */
   pushSender?: PushSender;
+  /** Aplikasi Android (TWA) yang boleh membuka domain ini tanpa bilah alamat: paket + sidik SHA-256 sertifikat. */
+  androidApp?: { packageName: string; sha256: string[] };
   /** Fee platform per seribu (default 50 = 5%; maks. 200 = 20%). */
   feePerMille?: number;
   /** Penyedia pembayaran. Default: simulasi (tanpa uang sungguhan). Server produk memakai "langsung" (lihat index.ts). */
@@ -1067,6 +1069,15 @@ export function createApp(opts: AppOptions) {
           return sendJson(res, 200, out);
         }
         throw new HttpError(404, "not_found", "Endpoint tidak ditemukan");
+      }
+      // Digital Asset Links: membuktikan APK KAMBE (TWA) adalah pemilik sah domain ini.
+      if (url.pathname === "/.well-known/assetlinks.json" && opts.androidApp && (req.method === "GET" || req.method === "HEAD")) {
+        return sendJson(res, 200, [
+          {
+            relation: ["delegate_permission/common.handle_all_urls"],
+            target: { namespace: "android_app", package_name: opts.androidApp.packageName, sha256_cert_fingerprints: opts.androidApp.sha256 },
+          },
+        ]);
       }
       if (serveStatic(ctx)) return;
       res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });

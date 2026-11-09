@@ -39,6 +39,7 @@ Variabel lingkungan (opsional). Nama lama `PINPATH_*` masih diterima; bila kedua
 | `KAMBE_NOTARY_SEED` | – | Seed rahasia (≥ 32 karakter) untuk kunci notaris deterministik — untuk hosting tanpa disk persisten (dipakai Blueprint Render paket gratis) |
 | `KAMBE_MONGODB_URI` | – | Hosting gratis berdisk sementara (Koyeb dll.): database SQLite dipulihkan dari & disalin ke MongoDB Atlas (GridFS, 3 versi terakhir) tiap `KAMBE_SNAPSHOT_INTERVAL_S` detik (default 30) dan saat SIGTERM |
 | `KAMBE_SNAPSHOT_KEY` | – | Wajib bila `KAMBE_MONGODB_URI` diisi: rahasia ≥ 32 karakter untuk mengenkripsi snapshot (AES-256-GCM) |
+| `KAMBE_ANDROID_PACKAGE` + `KAMBE_ANDROID_CERT_SHA256` | – | APK Android (TWA): menyajikan `/.well-known/assetlinks.json` agar APK terbuka tanpa bilah alamat. Lihat `android/README.md` |
 | `KAMBE_FREE_PLATFORM` | `1` | Platform gratis sepenuhnya (semua fitur PRO terbuka, langganan dimatikan). `0` = alur PRO lama |
 | `KAMBE_PUBLIC_URL` | – | Alamat publik aplikasi (tujuan kembali setelah bayar di gateway) |
 | `KAMBE_SERVE_DIST` | – | Khusus uji: `1` + `NODE_ENV=test` = sajikan `dist/` dengan pembayaran simulasi. Di mode lain server menolak start. **Jangan dipakai untuk deployment** (pakai `NODE_ENV=production`) |

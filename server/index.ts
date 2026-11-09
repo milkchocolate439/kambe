@@ -60,6 +60,11 @@ const app = createApp({
   // Kunci VAPID Web Push: dari seed notaris (stabil tanpa disk) atau berkas di samping database.
   vapid: readEnv(env, "NOTARY_SEED") ? vapidFromSeed(readEnv(env, "NOTARY_SEED")!) : vapidFromFile(join(dirname(dbPath), "vapid.json")),
   pushSubject: readEnv(env, "PUBLIC_URL"),
+  // APK Android (TWA): KAMBE_ANDROID_PACKAGE + KAMBE_ANDROID_CERT_SHA256 (dipisah koma) → /.well-known/assetlinks.json
+  androidApp:
+    readEnv(env, "ANDROID_PACKAGE") && readEnv(env, "ANDROID_CERT_SHA256")
+      ? { packageName: readEnv(env, "ANDROID_PACKAGE")!, sha256: readEnv(env, "ANDROID_CERT_SHA256")!.split(",").map((x) => x.trim()).filter(Boolean) }
+      : undefined,
   staticDir: staticDirFor(env, root),
   secure: readEnv(env, "SECURE") === "1",
   trustProxy: readEnv(env, "TRUST_PROXY") === "1",
